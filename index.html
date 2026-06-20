@@ -1,0 +1,1779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JAMB CBT Mock App</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+:root{
+  --ink:#102a1f;
+  --paper:#f6f4ec;
+  --card:#ffffff;
+  --line:#dad3bd;
+  --accent:#1f6f43;
+  --accent-dark:#134d2e;
+  --warn:#b3491f;
+  --gold:#c08a2e;
+  --muted:#666b5e;
+  --radius:10px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:'Source Sans Pro',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  background:var(--paper);
+  color:var(--ink);
+  min-height:100vh;
+  position:relative;
+}
+/* JAMB watermark behind all content - inline SVG text, no external
+   image dependency, so it can never fail to load or show the wrong logo */
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600"><text x="50%25" y="50%25" text-anchor="middle" dominant-baseline="middle" font-family="Georgia, serif" font-weight="bold" font-size="120" fill="%231f6f43">JAMB</text></svg>');
+  background-repeat:no-repeat;
+  background-position:center 35vh;
+  background-size:min(70vw,480px);
+  opacity:0.06;
+  pointer-events:none;
+  z-index:0;
+}
+#root{position:relative; z-index:1;}
+h1,h2,h3,h4{
+  font-family:'Iowan Old Style',Palatino,'Palatino Linotype',Georgia,serif;
+  font-weight:700;
+  margin:0 0 .4em 0;
+  letter-spacing:.2px;
+}
+p{margin:0 0 .8em 0; line-height:1.5;}
+a{color:var(--accent-dark);}
+button{
+  font-family:inherit;
+  cursor:pointer;
+  border:none;
+  border-radius:var(--radius);
+  padding:.7em 1.3em;
+  font-size:.95rem;
+  font-weight:600;
+  transition:transform .08s ease, box-shadow .15s ease, background .15s ease;
+}
+button:active{transform:translateY(1px);}
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible{
+  outline:3px solid var(--gold);
+  outline-offset:1px;
+}
+.btn-primary{background:var(--accent); color:#fff;}
+.btn-primary:hover{background:var(--accent-dark);}
+.btn-secondary{background:#fff; color:var(--ink); border:1px solid var(--line);}
+.btn-secondary:hover{background:#efeade;}
+.btn-warn{background:var(--warn); color:#fff;}
+.btn-warn:hover{background:#8f3a18;}
+.btn-ghost{background:transparent; color:var(--accent-dark); padding:.5em .8em;}
+.btn-ghost:hover{background:rgba(31,111,67,.08);}
+input,select,textarea{
+  font-family:inherit;
+  font-size:1rem;
+  padding:.65em .8em;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:#fff;
+  color:var(--ink);
+  width:100%;
+}
+label{font-size:.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:.3em;}
+.field{margin-bottom:1em;}
+.app-shell{min-height:100vh; display:flex; flex-direction:column;}
+.topbar{
+  background:var(--ink); color:#f6f4ec;
+  padding:.9em 1.4em;
+  display:flex; align-items:center; justify-content:space-between;
+  position:sticky; top:0; z-index:50;
+}
+.topbar .brand{
+  font-family:'Iowan Old Style',Palatino,Georgia,serif;
+  font-size:1.1rem; font-weight:700; letter-spacing:.3px;
+  display:flex; align-items:center; gap:.5em;
+}
+.topbar .brand .mark{
+  width:1.6em;height:1.6em;border-radius:5px;
+  background:var(--gold); color:var(--ink);
+  display:flex;align-items:center;justify-content:center;
+  font-size:.78rem; font-weight:800;
+}
+.topbar nav{display:flex; gap:.3em; align-items:center; flex-wrap:wrap;}
+.topbar nav button{padding:.5em .85em; font-size:.82rem;}
+.main{flex:1; max-width:1100px; margin:0 auto; padding:2em 1.4em; width:100%;}
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  padding:1.6em;
+  margin-bottom:1.2em;
+  box-shadow:0 1px 2px rgba(0,0,0,.03);
+}
+.card-grid{display:grid; gap:1em;}
+.grid-2{grid-template-columns:repeat(auto-fit,minmax(240px,1fr));}
+.grid-3{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
+.grid-4{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
+.center-screen{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:1.5em;}
+.auth-card{max-width:420px; width:100%; position:relative; overflow:hidden;}
+.eyebrow{text-transform:uppercase; letter-spacing:1.5px; font-size:.72rem; color:var(--accent-dark); font-weight:700; margin-bottom:.5em;}
+.muted{color:var(--muted);}
+.divider{height:1px; background:var(--line); margin:1.2em 0;}
+.tag{
+  display:inline-block; background:rgba(31,111,67,.1); color:var(--accent-dark);
+  font-size:.72rem; font-weight:700; padding:.2em .6em; border-radius:5px;
+  text-transform:uppercase; letter-spacing:.5px;
+}
+.error-box{background:#fbeae3; border:1px solid var(--warn); color:#7a2e10; padding:.8em 1em; border-radius:8px; font-size:.9rem; margin-bottom:1em;}
+.success-box{background:#e8f3ec; border:1px solid var(--accent); color:var(--accent-dark); padding:.8em 1em; border-radius:8px; font-size:.9rem; margin-bottom:1em;}
+.mode-card{cursor:pointer; transition:border-color .15s ease, transform .1s ease; border-width:1.5px;}
+.mode-card:hover{border-color:var(--accent); transform:translateY(-2px);}
+.mode-card .num{font-family:'Iowan Old Style',Georgia,serif; font-size:2rem; color:var(--gold); font-weight:700; line-height:1;}
+.question-block{border-bottom:1px solid var(--line); padding-bottom:1.4em; margin-bottom:1.4em;}
+.question-block:last-child{border-bottom:none;}
+.option-row{
+  display:flex; align-items:flex-start; gap:.7em;
+  padding:.6em .8em; border:1px solid var(--line); border-radius:8px;
+  margin-bottom:.5em; cursor:pointer; background:#fff;
+}
+.option-row:hover{background:#f5f2e8;}
+.option-row.selected{border-color:var(--accent); background:rgba(31,111,67,.07);}
+.option-row.correct{border-color:var(--accent); background:rgba(31,111,67,.12);}
+.option-row.incorrect{border-color:var(--warn); background:rgba(179,73,31,.08);}
+.option-row input{width:auto; margin-top:.2em;}
+.timer-badge{background:var(--ink); color:#fff; padding:.4em .9em; border-radius:8px; font-weight:700; font-family:'Iowan Old Style',Georgia,serif; letter-spacing:.5px; font-size:1.05rem;}
+.timer-badge.low{background:var(--warn);}
+table{width:100%; border-collapse:collapse; font-size:.92rem;}
+th,td{padding:.55em .7em; text-align:left; border-bottom:1px solid var(--line);}
+th{color:var(--muted); font-weight:700; font-size:.78rem; text-transform:uppercase; letter-spacing:.4px;}
+.subject-pill{display:inline-flex; align-items:center; gap:.4em; padding:.5em 1em; border:1px solid var(--line); border-radius:20px; cursor:pointer; background:#fff; font-size:.88rem;}
+.subject-pill.active{background:var(--accent); color:#fff; border-color:var(--accent);}
+.subject-pill.done{border-color:var(--accent); color:var(--accent-dark);}
+img.q-image{max-width:100%; border-radius:8px; margin:.6em 0; border:1px solid var(--line);}
+.empty-state{text-align:center; padding:3em 1em; color:var(--muted);}
+.spinner{width:22px;height:22px;border:3px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; display:inline-block;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.flex-between{display:flex; align-items:center; justify-content:space-between; gap:1em; flex-wrap:wrap;}
+.flex-row{display:flex; align-items:center; gap:.7em; flex-wrap:wrap;}
+.diff-badge{font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.4px; padding:.15em .5em; border-radius:4px;}
+.diff-easy{background:#e8f3ec; color:var(--accent-dark);}
+.diff-moderate{background:#fbf2de; color:#8a6a16;}
+.diff-difficult{background:#fbeae3; color:#7a2e10;}
+@media print{
+  .topbar, .no-print{display:none !important;}
+  body{background:#fff;}
+  body::before{display:none;}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="boot-error" style="display:none; position:fixed; inset:0; background:#102a1f; color:#fff; padding:1.5em; font-family:monospace; font-size:14px; overflow:auto; z-index:9999; white-space:pre-wrap;"></div>
+<script>
+(function(){
+  var errBox = document.getElementById('boot-error');
+  var lines = [];
+  function show(){ errBox.style.display = 'block'; errBox.textContent = lines.join('\n\n'); }
+  window.addEventListener('error', function(e){
+    lines.push('ERROR: ' + e.message + '\nFile: ' + e.filename + '\nLine: ' + e.lineno + ', Col: ' + e.colno);
+    show();
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    lines.push('PROMISE REJECTION: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+    show();
+  });
+  setTimeout(function(){
+    var root = document.getElementById('root');
+    if(root && root.innerHTML.trim() === ''){
+      var report = ['App did not render. Library check:'];
+      report.push('React loaded: ' + (typeof React !== 'undefined'));
+      report.push('ReactDOM loaded: ' + (typeof ReactDOM !== 'undefined'));
+      report.push('Babel loaded: ' + (typeof Babel !== 'undefined'));
+      report.push('Supabase loaded: ' + (typeof window.supabase !== 'undefined'));
+      report.push('jsPDF loaded: ' + (typeof window.jspdf !== 'undefined'));
+      lines.push(report.join('\n'));
+      show();
+    }
+  }, 4000);
+})();
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// =====================================================================
+// SUPABASE CONFIG (same project as the other app; all tables prefixed
+// jamb_ so nothing here ever touches the other app's data)
+// =====================================================================
+const SUPABASE_URL = "https://daitijxaextwwcrlqwue.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRhaXRpanhhZXh0d3djcmxxd3VlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1NTM5NjAsImV4cCI6MjA5NzEyOTk2MH0.xfuqDClliGhaxdv8i-vjR-DZRedfw8X8MZClHioc1U0";
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Shared admin code with the other app
+const ADMIN_CODE = "090684913162008";
+
+async function simpleHash(text){
+  const enc = new TextEncoder().encode(text.trim().toLowerCase());
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+function fmtTime(totalSeconds){
+  const h = Math.floor(totalSeconds/3600);
+  const m = Math.floor((totalSeconds%3600)/60);
+  const s = totalSeconds%60;
+  if(h > 0) return `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+  return `${m}:${String(s).padStart(2,"0")}`;
+}
+
+async function uploadImage(file){
+  if(!file) return null;
+  const ext = file.name.split(".").pop();
+  const path = `uploads/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`;
+  const { error } = await sb.storage.from("jamb-images").upload(path, file);
+  if(error){ console.error(error); return null; }
+  const { data } = sb.storage.from("jamb-images").getPublicUrl(path);
+  return data.publicUrl;
+}
+
+// =====================================================================
+// SCORING ENGINE
+// Question distribution: 40% difficult, 45% moderate, 15% easy (of the
+// question count actually used in a session).
+// Marking scheme: difficult questions SHARE 60 marks, moderate SHARE 32
+// marks, easy SHARE 8 marks -- out of 100 per subject, regardless of N.
+// =====================================================================
+function buildDifficultyPlan(totalQuestions){
+  const difficultCount = Math.round(totalQuestions * 0.40);
+  const moderateCount = Math.round(totalQuestions * 0.45);
+  const easyCount = Math.max(totalQuestions - difficultCount - moderateCount, 0);
+  return {
+    difficult: { count: difficultCount, markPool: 60, markEach: difficultCount>0 ? 60/difficultCount : 0 },
+    moderate: { count: moderateCount, markPool: 32, markEach: moderateCount>0 ? 32/moderateCount : 0 },
+    easy: { count: easyCount, markPool: 8, markEach: easyCount>0 ? 8/easyCount : 0 },
+  };
+}
+
+// Pick questions for a subject matching the required difficulty plan,
+// from a pool of already-fetched questions (grouped by difficulty).
+// seenIds: a Set of question IDs this user has already been served for
+// this subject. Unseen questions are always preferred; only once a
+// difficulty tier is fully exhausted (not enough unseen left) do
+// already-seen ones get reused to fill the remaining slots.
+function pickQuestionsForPlan(pool, plan, seenIds){
+  seenIds = seenIds || new Set();
+  const byDiff = { easy: [], moderate: [], difficult: [] };
+  pool.forEach(q => { if(byDiff[q.difficulty]) byDiff[q.difficulty].push(q); });
+
+  const picked = [];
+  ["difficult","moderate","easy"].forEach(diff=>{
+    const need = plan[diff].count;
+    const all = byDiff[diff];
+    const unseen = all.filter(q => !seenIds.has(q.id)).sort(()=>Math.random()-0.5);
+    const seen = all.filter(q => seenIds.has(q.id)).sort(()=>Math.random()-0.5);
+    // prefer unseen; only dip into seen ones if unseen can't fill the need
+    let chosen = unseen.slice(0, need);
+    if(chosen.length < need){
+      chosen = chosen.concat(seen.slice(0, need - chosen.length));
+    }
+    chosen.forEach(q => picked.push({ ...q, _markValue: plan[diff].markEach }));
+  });
+  return picked.sort(()=>Math.random()-0.5);
+}
+
+// Fetch the set of question IDs this user has already seen for a subject.
+// If the seen count covers the entire available pool for that subject
+// (i.e. they've exhausted it), the history for that subject is cleared
+// so they start seeing fresh-feeling rotations again.
+async function getSeenQuestionIds(userId, subjectId, poolSize){
+  const { data: seenRows } = await sb.from("jamb_seen_questions").select("question_id").eq("user_id", userId).eq("subject_id", subjectId);
+  let seen = seenRows || [];
+  if(poolSize > 0 && seen.length >= poolSize){
+    await sb.from("jamb_seen_questions").delete().eq("user_id", userId).eq("subject_id", subjectId);
+    seen = [];
+  }
+  return new Set(seen.map(r => r.question_id));
+}
+
+// Record questions just served to a user as "seen" (upsert avoids
+// duplicate-key errors if a question is re-served after a reset).
+async function recordSeenQuestions(userId, subjectId, questions){
+  if(!questions || questions.length===0) return;
+  const rows = questions.map(q => ({ user_id:userId, question_id:q.id, subject_id:subjectId }));
+  await sb.from("jamb_seen_questions").upsert(rows, { onConflict: "user_id,question_id" });
+}
+
+// Given answered questions (each carrying _markValue), compute raw score
+// out of 100, rounded to nearest whole number.
+function scoreSubjectAttempt(questions, answers){
+  let earned = 0;
+  let correctCount = 0;
+  questions.forEach(q=>{
+    const sel = answers[q.id];
+    if(sel && sel === q.correct_option){
+      earned += q._markValue;
+      correctCount++;
+    }
+  });
+  return { rawScore: Math.round(earned), correctCount, total: questions.length };
+}
+
+
+function getISOWeek(date){
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2,"0")}`;
+}
+
+// Returns the Date objects for this week's challenge window (Sat 10:00 to Sat 12:00)
+function getChallengeWindow(){
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun..6=Sat
+  const daysUntilSat = (6 - day + 7) % 7;
+  const saturday = new Date(now);
+  saturday.setDate(now.getDate() + daysUntilSat);
+  const start = new Date(saturday); start.setHours(10,0,0,0);
+  const end = new Date(saturday); end.setHours(12,0,0,0);
+  if(day === 6){
+    // if it's already past this Saturday's window, point to next week's
+    if(now > end){
+      start.setDate(start.getDate()+7);
+      end.setDate(end.getDate()+7);
+    }
+  }
+  return { start, end, weekKey: getISOWeek(start) };
+}
+
+// =====================================================================
+// ROOT APP
+// =====================================================================
+function App(){
+  const [user, setUser] = useState(null);
+  const [screen, setScreen] = useState("login");
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(()=>{
+    const saved = localStorage.getItem("jamb_user");
+    if(saved){
+      try{ setUser(JSON.parse(saved)); setScreen("home"); }catch(e){}
+    }
+  },[]);
+
+  function loginSuccess(u){
+    setUser(u);
+    localStorage.setItem("jamb_user", JSON.stringify(u));
+    setScreen("home");
+  }
+  function logout(){
+    setUser(null); setIsAdmin(false);
+    localStorage.removeItem("jamb_user");
+    setScreen("login");
+  }
+
+  if(!user){
+    if(screen === "register") return <RegisterScreen onDone={()=>setScreen("login")} onBack={()=>setScreen("login")} />;
+    if(screen === "forgot") return <ForgotPasswordScreen onBack={()=>setScreen("login")} />;
+    return <LoginScreen onLogin={loginSuccess} onGoRegister={()=>setScreen("register")} onGoForgot={()=>setScreen("forgot")} />;
+  }
+
+  return <MainApp user={user} onLogout={logout} isAdmin={isAdmin} setIsAdmin={setIsAdmin} />;
+}
+
+// =====================================================================
+// AUTH SCREENS
+// =====================================================================
+const SECURITY_QUESTIONS = [
+  "What is your mother's maiden name?",
+  "What was the name of your first school?",
+  "What is your favorite subject?",
+  "What city were you born in?",
+  "What is your best friend's first name?",
+];
+
+function LoginScreen({ onLogin, onGoRegister, onGoForgot }){
+  const [email,setEmail] = useState("");
+  const [password,setPassword] = useState("");
+  const [err,setErr] = useState("");
+  const [loading,setLoading] = useState(false);
+
+  async function handleSubmit(e){
+    e.preventDefault();
+    setErr(""); setLoading(true);
+    try{
+      const { data, error } = await sb.from("jamb_users").select("*").eq("email", email.trim().toLowerCase()).maybeSingle();
+      if(error) throw error;
+      if(!data){ setErr("No account found with that email."); setLoading(false); return; }
+      const hash = await simpleHash(password);
+      if(hash !== data.password_hash){ setErr("Incorrect password."); setLoading(false); return; }
+      onLogin({ id:data.id, full_name:data.full_name, email:data.email, phone:data.phone });
+    }catch(ex){
+      setErr("Something went wrong logging in. Please try again.");
+      console.error(ex);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div className="center-screen">
+      <div className="card auth-card">
+        <div className="eyebrow">JAMB CBT Mock</div>
+        <h1>Mock App</h1>
+        <p className="muted">Sign in to start practicing.</p>
+        {err && <div className="error-box">{err}</div>}
+        <form onSubmit={handleSubmit}>
+          <div className="field">
+            <label>Email</label>
+            <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" />
+          </div>
+          <div className="field">
+            <label>Password</label>
+            <input type="password" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" />
+          </div>
+          <button type="submit" className="btn-primary" style={{width:"100%"}} disabled={loading}>
+            {loading ? <span className="spinner"></span> : "Sign in"}
+          </button>
+        </form>
+        <div className="divider"></div>
+        <div className="flex-between">
+          <button className="btn-ghost" onClick={onGoForgot}>Forgot password?</button>
+          <button className="btn-ghost" onClick={onGoRegister}>Create account</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RegisterScreen({ onDone, onBack }){
+  const [form,setForm] = useState({
+    full_name:"", email:"", phone:"", password:"", confirm:"",
+    security_question: SECURITY_QUESTIONS[0], security_answer:""
+  });
+  const [err,setErr] = useState("");
+  const [loading,setLoading] = useState(false);
+
+  function update(field,val){ setForm(f=>({...f,[field]:val})); }
+
+  async function handleSubmit(e){
+    e.preventDefault();
+    setErr("");
+    if(form.password.length < 4){ setErr("Password should be at least 4 characters."); return; }
+    if(form.password !== form.confirm){ setErr("Passwords do not match."); return; }
+    if(!form.security_answer.trim()){ setErr("Please answer the security question."); return; }
+    setLoading(true);
+    try{
+      const { data: existing } = await sb.from("jamb_users").select("id").eq("email", form.email.trim().toLowerCase()).maybeSingle();
+      if(existing){ setErr("An account with that email already exists."); setLoading(false); return; }
+      const password_hash = await simpleHash(form.password);
+      const security_answer_hash = await simpleHash(form.security_answer);
+      const { error } = await sb.from("jamb_users").insert({
+        full_name: form.full_name.trim(), email: form.email.trim().toLowerCase(), phone: form.phone.trim(),
+        password_hash, security_question: form.security_question, security_answer_hash
+      });
+      if(error) throw error;
+      onDone();
+    }catch(ex){ setErr("Could not create account. Please try again."); console.error(ex); }
+    setLoading(false);
+  }
+
+  return (
+    <div className="center-screen">
+      <div className="card auth-card">
+        <div className="eyebrow">Create account</div>
+        <h1>Join the mock app</h1>
+        {err && <div className="error-box">{err}</div>}
+        <form onSubmit={handleSubmit}>
+          <div className="field"><label>Full name</label><input required value={form.full_name} onChange={e=>update("full_name",e.target.value)} /></div>
+          <div className="field"><label>Email</label><input type="email" required value={form.email} onChange={e=>update("email",e.target.value)} /></div>
+          <div className="field"><label>Phone number</label><input required value={form.phone} onChange={e=>update("phone",e.target.value)} /></div>
+          <div className="field"><label>Password</label><input type="password" required value={form.password} onChange={e=>update("password",e.target.value)} /></div>
+          <div className="field"><label>Confirm password</label><input type="password" required value={form.confirm} onChange={e=>update("confirm",e.target.value)} /></div>
+          <div className="field">
+            <label>Security question (used to reset your password)</label>
+            <select value={form.security_question} onChange={e=>update("security_question",e.target.value)}>
+              {SECURITY_QUESTIONS.map(q=> <option key={q} value={q}>{q}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>Your answer</label><input required value={form.security_answer} onChange={e=>update("security_answer",e.target.value)} /></div>
+          <button type="submit" className="btn-primary" style={{width:"100%"}} disabled={loading}>{loading?<span className="spinner"></span>:"Create account"}</button>
+        </form>
+        <div className="divider"></div>
+        <button className="btn-ghost" onClick={onBack}>Back to sign in</button>
+      </div>
+    </div>
+  );
+}
+
+function ForgotPasswordScreen({ onBack }){
+  const [step,setStep] = useState(1);
+  const [email,setEmail] = useState("");
+  const [userRec,setUserRec] = useState(null);
+  const [answer,setAnswer] = useState("");
+  const [newPassword,setNewPassword] = useState("");
+  const [confirm,setConfirm] = useState("");
+  const [err,setErr] = useState("");
+  const [success,setSuccess] = useState("");
+  const [loading,setLoading] = useState(false);
+
+  async function findUser(e){
+    e.preventDefault(); setErr(""); setLoading(true);
+    const { data, error } = await sb.from("jamb_users").select("*").eq("email", email.trim().toLowerCase()).maybeSingle();
+    setLoading(false);
+    if(error || !data){ setErr("No account found with that email."); return; }
+    setUserRec(data); setStep(2);
+  }
+  async function checkAnswer(e){
+    e.preventDefault(); setErr(""); setLoading(true);
+    const hash = await simpleHash(answer);
+    setLoading(false);
+    if(hash !== userRec.security_answer_hash){ setErr("That answer doesn't match our records."); return; }
+    setStep(3);
+  }
+  async function resetPassword(e){
+    e.preventDefault(); setErr("");
+    if(newPassword.length < 4){ setErr("Password should be at least 4 characters."); return; }
+    if(newPassword !== confirm){ setErr("Passwords do not match."); return; }
+    setLoading(true);
+    const password_hash = await simpleHash(newPassword);
+    const { error } = await sb.from("jamb_users").update({ password_hash }).eq("id", userRec.id);
+    setLoading(false);
+    if(error){ setErr("Could not reset password. Try again."); return; }
+    setSuccess("Password reset. You can sign in now.");
+  }
+
+  return (
+    <div className="center-screen">
+      <div className="card auth-card">
+        <div className="eyebrow">Account recovery</div>
+        <h1>Reset password</h1>
+        {err && <div className="error-box">{err}</div>}
+        {success && <div className="success-box">{success}</div>}
+        {!success && step===1 && (
+          <form onSubmit={findUser}>
+            <div className="field"><label>Email</label><input type="email" required value={email} onChange={e=>setEmail(e.target.value)} /></div>
+            <button className="btn-primary" style={{width:"100%"}} disabled={loading}>{loading?<span className="spinner"></span>:"Continue"}</button>
+          </form>
+        )}
+        {!success && step===2 && (
+          <form onSubmit={checkAnswer}>
+            <p><strong>{userRec.security_question}</strong></p>
+            <div className="field"><label>Your answer</label><input required value={answer} onChange={e=>setAnswer(e.target.value)} /></div>
+            <button className="btn-primary" style={{width:"100%"}} disabled={loading}>{loading?<span className="spinner"></span>:"Verify"}</button>
+          </form>
+        )}
+        {!success && step===3 && (
+          <form onSubmit={resetPassword}>
+            <div className="field"><label>New password</label><input type="password" required value={newPassword} onChange={e=>setNewPassword(e.target.value)} /></div>
+            <div className="field"><label>Confirm new password</label><input type="password" required value={confirm} onChange={e=>setConfirm(e.target.value)} /></div>
+            <button className="btn-primary" style={{width:"100%"}} disabled={loading}>{loading?<span className="spinner"></span>:"Reset password"}</button>
+          </form>
+        )}
+        <div className="divider"></div>
+        <button className="btn-ghost" onClick={onBack}>Back to sign in</button>
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// MAIN APP SHELL
+// =====================================================================
+function MainApp({ user, onLogout, isAdmin, setIsAdmin }){
+  const [view, setView] = useState("home");
+  function goHome(){ setView("home"); }
+
+  return (
+    <div className="app-shell">
+      <div className="topbar">
+        <div className="brand"><span className="mark">J</span> JAMB Mock</div>
+        <nav>
+          <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={goHome}>Home</button>
+          <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={()=>setView("history")}>History</button>
+          <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={()=>setView("leaderboard")}>Leaderboard</button>
+          <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={()=>setView("admin")}>Admin</button>
+          <button className="btn-secondary" onClick={onLogout}>Sign out</button>
+        </nav>
+      </div>
+      <div className="main">
+        {view==="home" && <HomeScreen user={user} onSelect={setView} />}
+        {view==="mock" && <MockFlow user={user} onExit={goHome} />}
+        {view==="practice" && <PracticeFlow user={user} onExit={goHome} />}
+        {view==="single_subject" && <SingleSubjectFlow user={user} onExit={goHome} />}
+        {view==="weekly_challenge" && <WeeklyChallengeFlow user={user} onExit={goHome} />}
+        {view==="history" && <HistoryScreen user={user} onExit={goHome} />}
+        {view==="leaderboard" && <LeaderboardScreen onExit={goHome} />}
+        {view==="admin" && <AdminGate isAdmin={isAdmin} setIsAdmin={setIsAdmin} onExit={goHome} />}
+      </div>
+    </div>
+  );
+}
+
+function HomeScreen({ user, onSelect }){
+  return (
+    <div>
+      <div className="eyebrow">Welcome back</div>
+      <h1>{user.full_name.split(" ")[0]}, ready for JAMB practice?</h1>
+      <p className="muted">All sessions use JAMB's question distribution (40% difficult, 45% moderate, 15% easy) and marking scheme automatically.</p>
+
+      <div className="card-grid grid-2" style={{marginTop:"1.6em"}}>
+        <div className="card mode-card" onClick={()=>onSelect("mock")}>
+          <div className="num">01</div>
+          <h3>Mock Exam</h3>
+          <p className="muted">English (60) + 3 subjects (40 each) = 180 questions, 2 hours, graded over 400.</p>
+          <span className="tag">Full simulation</span>
+        </div>
+        <div className="card mode-card" onClick={()=>onSelect("practice")}>
+          <div className="num">02</div>
+          <h3>Practice Mode</h3>
+          <p className="muted">Like the mock, but you choose question count, topics, year, and time per subject.</p>
+          <span className="tag">Customizable</span>
+        </div>
+        <div className="card mode-card" onClick={()=>onSelect("single_subject")}>
+          <div className="num">03</div>
+          <h3>Single Subject Practice</h3>
+          <p className="muted">Same as practice mode, but for just one subject at a time.</p>
+          <span className="tag">Focused</span>
+        </div>
+        <div className="card mode-card" onClick={()=>onSelect("weekly_challenge")}>
+          <div className="num">04</div>
+          <h3>Weekly Mock Challenge</h3>
+          <p className="muted">Saturday 10AM–12PM. Compete with other users. Leaderboard opens at 12:01PM.</p>
+          <span className="tag">Competition</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// MOCK EXAM MODE
+// English (compulsory, 60Q) + 3 chosen subjects (40Q each) = 180Q, 2hrs
+// =====================================================================
+function MockFlow({ user, onExit }){
+  const [stage,setStage] = useState("setup");
+  const [bundle,setBundle] = useState(null);
+  const [result,setResult] = useState(null);
+
+  if(stage==="setup") return <MockSetup user={user} onStart={(b)=>{setBundle(b); setStage("exam");}} onExit={onExit} />;
+  if(stage==="exam") return <MultiSubjectExam bundle={bundle} user={user} mode="mock" onFinish={(r)=>{setResult(r); setStage("results");}} />;
+  if(stage==="results") return <MultiSubjectResults result={result} user={user} onExit={onExit} />;
+}
+
+function MockSetup({ user, onStart, onExit }){
+  const [subjects,setSubjects] = useState([]);
+  const [chosen,setChosen] = useState([]); // 3 non-English subject ids
+  const [loading,setLoading] = useState(true);
+  const [err,setErr] = useState("");
+  const [preparing,setPreparing] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_subjects").select("*").order("name");
+    setSubjects(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  const english = subjects.find(s=>s.is_compulsory);
+  const others = subjects.filter(s=>!s.is_compulsory);
+
+  function toggle(id){
+    setChosen(prev=>{
+      if(prev.includes(id)) return prev.filter(x=>x!==id);
+      if(prev.length>=3){ setErr("You can only choose 3 subjects besides English."); return prev; }
+      setErr("");
+      return [...prev, id];
+    });
+  }
+
+  async function handleStart(){
+    if(!english){ setErr("English subject not found — check your subject list in Admin."); return; }
+    if(chosen.length !== 3){ setErr("Please choose exactly 3 subjects."); return; }
+    setErr(""); setPreparing(true);
+    const subjectPlan = [
+      { subject: english, questionCount: 60 },
+      ...chosen.map(id => ({ subject: subjects.find(s=>s.id===id), questionCount: 40 }))
+    ];
+    const subjectData = [];
+    for(const sp of subjectPlan){
+      const { data: pool } = await sb.from("jamb_questions").select("*").eq("subject_id", sp.subject.id);
+      if(!pool || pool.length===0){ setErr(`No questions found for ${sp.subject.name} yet.`); setPreparing(false); return; }
+      const plan = buildDifficultyPlan(sp.questionCount);
+      const seenIds = await getSeenQuestionIds(user.id, sp.subject.id, pool.length);
+      const picked = pickQuestionsForPlan(pool, plan, seenIds);
+      if(picked.length < sp.questionCount * 0.5){ setErr(`Not enough questions across difficulty levels for ${sp.subject.name} — only ${picked.length} of ${sp.questionCount} could be filled. Add more questions in Admin.`); setPreparing(false); return; }
+      await recordSeenQuestions(user.id, sp.subject.id, picked);
+      subjectData.push({ subject: sp.subject, questions: picked, plan });
+    }
+    setPreparing(false);
+    onStart({ subjectData, durationSeconds: 2*3600 });
+  }
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Mock Exam</h1>
+      <p className="muted">English Language is compulsory (60 questions). Choose 3 more subjects (40 questions each). Total: 180 questions, 2 hours, graded over 400.</p>
+      {err && <div className="error-box">{err}</div>}
+      <div className="card">
+        <div className="field">
+          <label>Compulsory subject</label>
+          <span className="tag">{english ? english.name : "English not found"}</span>
+        </div>
+        <div className="field">
+          <label>Choose 3 other subjects ({chosen.length}/3 selected)</label>
+          <div className="flex-row">
+            {others.map(s=>(
+              <span key={s.id} className={"subject-pill"+(chosen.includes(s.id)?" active":"")} onClick={()=>toggle(s.id)}>{s.name}</span>
+            ))}
+          </div>
+        </div>
+        <button className="btn-primary" onClick={handleStart} disabled={preparing}>{preparing?<span className="spinner"></span>:"Start mock exam"}</button>
+      </div>
+    </div>
+  );
+}
+
+// Reusable exam runner for multi-subject sessions (Mock, Weekly Challenge,
+// and multi-subject Practice mode all use this)
+function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
+  const { subjectData, durationSeconds } = bundle;
+  const [subjIndex,setSubjIndex] = useState(0);
+  const [qIndex,setQIndex] = useState(0);
+  const [answers,setAnswers] = useState({}); // questionId -> option
+  const [timeLeft,setTimeLeft] = useState(durationSeconds);
+  const submittedRef = useRef(false);
+
+  const handleSubmit = useCallback(async ()=>{
+    if(submittedRef.current) return;
+    submittedRef.current = true;
+    const perSubject = subjectData.map(sd=>{
+      const { rawScore, correctCount, total } = scoreSubjectAttempt(sd.questions, answers);
+      return { subject: sd.subject, rawScore, correctCount, total };
+    });
+    const totalScore = perSubject.reduce((s,r)=>s+r.rawScore, 0);
+    const maxScore = perSubject.length * 100;
+
+    const responses = [];
+    subjectData.forEach(sd=>{
+      sd.questions.forEach(q=>{
+        const sel = answers[q.id];
+        const isCorrect = sel === q.correct_option;
+        responses.push({ question_id:q.id, selected_option: sel||null, is_correct:isCorrect, marks_awarded: isCorrect? q._markValue : 0 });
+      });
+    });
+
+    const { data: attempt } = await sb.from("jamb_attempts").insert({
+      user_id:user.id, mode, challenge_week: challengeWeek || null,
+      total_score: totalScore, max_score: maxScore,
+      submitted_at: new Date().toISOString(), duration_seconds: durationSeconds-timeLeft,
+      details: { perSubject: perSubject.map(r=>({code:r.subject.code,name:r.subject.name,rawScore:r.rawScore,correct:r.correctCount,total:r.total})) }
+    }).select().single();
+    if(attempt){
+      const rows = responses.map(r=>({...r, attempt_id: attempt.id}));
+      await sb.from("jamb_attempt_responses").insert(rows);
+    }
+    onFinish({ perSubject, totalScore, maxScore, subjectData, answers, attemptId: attempt?.id });
+  },[subjectData, answers, mode, challengeWeek, user, durationSeconds, timeLeft, onFinish]);
+
+  useEffect(()=>{
+    if(timeLeft<=0){ handleSubmit(); return; }
+    const t = setTimeout(()=>setTimeLeft(s=>s-1),1000);
+    return ()=>clearTimeout(t);
+  },[timeLeft, handleSubmit]);
+
+  const sd = subjectData[subjIndex];
+  const q = sd.questions[qIndex];
+
+  function switchSubject(i){ setSubjIndex(i); setQIndex(0); }
+
+  return (
+    <div>
+      <div className="flex-between no-print">
+        <h2 style={{margin:0}}>{({mock:"Mock Exam",weekly_challenge:"Weekly Challenge",practice:"Practice"})[mode] || "Exam"}</h2>
+        <span className={"timer-badge"+(timeLeft<300?" low":"")}>{fmtTime(timeLeft)}</span>
+      </div>
+      <div className="flex-row" style={{margin:"1em 0",flexWrap:"wrap"}}>
+        {subjectData.map((s,i)=>(
+          <span key={s.subject.id} className={"subject-pill"+(i===subjIndex?" active":"")} onClick={()=>switchSubject(i)}>{s.subject.name}</span>
+        ))}
+      </div>
+      <div className="card">
+        <div className="flex-between">
+          <p className="muted">{sd.subject.name} · Question {qIndex+1} of {sd.questions.length}</p>
+          <span className={"diff-badge diff-"+q.difficulty}>{q.difficulty}</span>
+        </div>
+        <p style={{fontWeight:600,fontSize:"1.05rem"}}>{q.question_text}</p>
+        {q.image_url && <img className="q-image" src={q.image_url} alt="" />}
+        {[["A",q.option_a],["B",q.option_b],["C",q.option_c],["D",q.option_d], ...(q.option_e?[["E",q.option_e]]:[])].map(([label,text])=>(
+          <div key={label} className={"option-row"+(answers[q.id]===label?" selected":"")} onClick={()=>setAnswers(a=>({...a,[q.id]:label}))}>
+            <input type="radio" readOnly checked={answers[q.id]===label} />
+            <span><strong>{label}.</strong> {text}</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex-between">
+        <button className="btn-secondary" disabled={qIndex===0} onClick={()=>setQIndex(i=>i-1)}>← Previous</button>
+        <span className="muted">{sd.subject.code} progress: {qIndex+1}/{sd.questions.length}</span>
+        {qIndex < sd.questions.length-1
+          ? <button className="btn-secondary" onClick={()=>setQIndex(i=>i+1)}>Next →</button>
+          : (subjIndex < subjectData.length-1
+              ? <button className="btn-secondary" onClick={()=>switchSubject(subjIndex+1)}>Next subject →</button>
+              : <button className="btn-primary" onClick={handleSubmit}>Submit exam</button>)}
+      </div>
+    </div>
+  );
+}
+
+function MultiSubjectResults({ result, user, onExit }){
+  const { perSubject, totalScore, maxScore } = result;
+
+  function handlePrint(){ window.print(); }
+  function handleSavePDF(){
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    doc.setFontSize(16); doc.text("JAMB Mock Result", 14, 18);
+    doc.setFontSize(11);
+    doc.text(`Name: ${user.full_name}`, 14, 28);
+    doc.text(`Date: ${new Date().toLocaleDateString()}`, 14, 35);
+    let y = 48;
+    doc.setFontSize(12);
+    doc.text("Subject", 14, y); doc.text("Score (/100)", 100, y); doc.text("Correct", 150, y);
+    y += 6; doc.line(14,y,196,y); y += 6;
+    perSubject.forEach(r=>{
+      doc.text(r.subject.name, 14, y);
+      doc.text(String(r.rawScore), 100, y);
+      doc.text(`${r.correctCount}/${r.total}`, 150, y);
+      y += 7;
+    });
+    y += 4; doc.line(14,y,196,y); y += 8;
+    doc.setFontSize(14); doc.text(`Total: ${totalScore} / ${maxScore}`, 14, y);
+    doc.save(`${user.full_name.replace(/\s+/g,"_")}_jamb_result.pdf`);
+  }
+
+  return (
+    <div>
+      <h1>Mock Result</h1>
+      <div className="card">
+        <p><strong>{user.full_name}</strong> · {new Date().toLocaleDateString()}</p>
+        <table>
+          <thead><tr><th>Subject</th><th>Score (/100)</th><th>Correct</th></tr></thead>
+          <tbody>
+            {perSubject.map(r=>(
+              <tr key={r.subject.id}><td>{r.subject.name}</td><td>{r.rawScore}</td><td>{r.correctCount}/{r.total}</td></tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="divider"></div>
+        <h2>{totalScore} / {maxScore}</h2>
+      </div>
+      <div className="flex-row no-print">
+        <button className="btn-secondary" onClick={handlePrint}>Print result</button>
+        <button className="btn-secondary" onClick={handleSavePDF}>Save as PDF</button>
+        <button className="btn-primary" onClick={onExit}>Back to home</button>
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// PRACTICE MODE (like mock, but customizable: question count per subject,
+// topics, year, and time)
+// =====================================================================
+function PracticeFlow({ user, onExit }){
+  const [stage,setStage] = useState("setup");
+  const [bundle,setBundle] = useState(null);
+  const [result,setResult] = useState(null);
+
+  if(stage==="setup") return <PracticeSetup user={user} onStart={(b)=>{setBundle(b); setStage("exam");}} onExit={onExit} />;
+  if(stage==="exam") return <MultiSubjectExam bundle={bundle} user={user} mode="practice" onFinish={(r)=>{setResult(r); setStage("results");}} />;
+  if(stage==="results") return <MultiSubjectResults result={result} user={user} onExit={onExit} />;
+}
+
+function SubjectConfigRow({ subject, config, onChange, topicsBySubject, loadTopics }){
+  useEffect(()=>{ loadTopics(subject.id); },[subject.id]);
+  const topics = topicsBySubject[subject.id] || [];
+  return (
+    <div className="card" style={{padding:"1.1em"}}>
+      <p style={{fontWeight:700,margin:0}}>{subject.name}</p>
+      <div className="card-grid grid-3" style={{marginTop:".6em"}}>
+        <div className="field">
+          <label>Questions</label>
+          <input type="number" min="5" max="100" value={config.count} onChange={e=>onChange({...config, count: parseInt(e.target.value)||10})} />
+        </div>
+        <div className="field">
+          <label>Year (optional)</label>
+          <input type="number" placeholder="e.g. 2022" value={config.year} onChange={e=>onChange({...config, year:e.target.value})} />
+        </div>
+        <div className="field">
+          <label>Topic (optional)</label>
+          <select value={config.topicId} onChange={e=>onChange({...config, topicId:e.target.value})}>
+            <option value="">All topics</option>
+            {topics.map(t=> <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PracticeSetup({ user, onStart, onExit }){
+  const [subjects,setSubjects] = useState([]);
+  const [chosenIds,setChosenIds] = useState([]); // up to 4 subjects (English optional here)
+  const [configs,setConfigs] = useState({}); // subjectId -> {count, year, topicId}
+  const [topicsBySubject,setTopicsBySubject] = useState({});
+  const [minutes,setMinutes] = useState(60);
+  const [loading,setLoading] = useState(true);
+  const [err,setErr] = useState("");
+  const [preparing,setPreparing] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_subjects").select("*").order("name");
+    setSubjects(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  async function loadTopics(subjectId){
+    if(topicsBySubject[subjectId]) return;
+    const { data } = await sb.from("jamb_topics").select("*").eq("subject_id",subjectId).order("name");
+    setTopicsBySubject(prev=>({...prev,[subjectId]:data||[]}));
+  }
+
+  function toggleSubject(id){
+    setChosenIds(prev=>{
+      if(prev.includes(id)) return prev.filter(x=>x!==id);
+      if(prev.length>=4){ setErr("You can practice up to 4 subjects at once."); return prev; }
+      setErr("");
+      setConfigs(c=>({...c,[id]: c[id] || {count:20, year:"", topicId:""}}));
+      return [...prev, id];
+    });
+  }
+
+  async function handleStart(){
+    if(chosenIds.length===0){ setErr("Choose at least one subject."); return; }
+    setErr(""); setPreparing(true);
+    const subjectData = [];
+    for(const id of chosenIds){
+      const subj = subjects.find(s=>s.id===id);
+      const cfg = configs[id] || {count:20, year:"", topicId:""};
+      let query = sb.from("jamb_questions").select("*").eq("subject_id", id);
+      if(cfg.topicId) query = query.eq("topic_id", cfg.topicId);
+      if(cfg.year) query = query.eq("year", parseInt(cfg.year));
+      const { data: pool } = await query;
+      if(!pool || pool.length===0){ setErr(`No questions found for ${subj.name} with those filters.`); setPreparing(false); return; }
+      const plan = buildDifficultyPlan(cfg.count);
+      const seenIds = await getSeenQuestionIds(user.id, id, pool.length);
+      const picked = pickQuestionsForPlan(pool, plan, seenIds);
+      if(picked.length===0){ setErr(`Could not build a question set for ${subj.name} — try fewer questions or remove filters.`); setPreparing(false); return; }
+      await recordSeenQuestions(user.id, id, picked);
+      subjectData.push({ subject: subj, questions: picked, plan });
+    }
+    setPreparing(false);
+    onStart({ subjectData, durationSeconds: minutes*60 });
+  }
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Practice Mode</h1>
+      <p className="muted">Choose up to 4 subjects, set how many questions, filter by topic or year, and set your time.</p>
+      {err && <div className="error-box">{err}</div>}
+      <div className="card">
+        <div className="field">
+          <label>Subjects ({chosenIds.length}/4 selected)</label>
+          <div className="flex-row">
+            {subjects.map(s=>(
+              <span key={s.id} className={"subject-pill"+(chosenIds.includes(s.id)?" active":"")} onClick={()=>toggleSubject(s.id)}>{s.name}</span>
+            ))}
+          </div>
+        </div>
+        <div className="field">
+          <label>Total time (minutes)</label>
+          <input type="number" min="5" value={minutes} onChange={e=>setMinutes(parseInt(e.target.value)||60)} />
+        </div>
+      </div>
+      {chosenIds.map(id=>(
+        <SubjectConfigRow key={id} subject={subjects.find(s=>s.id===id)} config={configs[id]||{count:20,year:"",topicId:""}}
+          onChange={(cfg)=>setConfigs(c=>({...c,[id]:cfg}))} topicsBySubject={topicsBySubject} loadTopics={loadTopics} />
+      ))}
+      {chosenIds.length>0 && <button className="btn-primary" onClick={handleStart} disabled={preparing} style={{marginTop:"1em"}}>{preparing?<span className="spinner"></span>:"Start practice"}</button>}
+    </div>
+  );
+}
+
+// =====================================================================
+// SINGLE SUBJECT PRACTICE (same as Practice Mode, but one subject only)
+// =====================================================================
+function SingleSubjectFlow({ user, onExit }){
+  const [stage,setStage] = useState("setup");
+  const [bundle,setBundle] = useState(null);
+  const [result,setResult] = useState(null);
+
+  if(stage==="setup") return <SingleSubjectSetup user={user} onStart={(b)=>{setBundle(b); setStage("exam");}} onExit={onExit} />;
+  if(stage==="exam") return <MultiSubjectExam bundle={bundle} user={user} mode="single_subject" onFinish={(r)=>{setResult(r); setStage("results");}} />;
+  if(stage==="results") return <MultiSubjectResults result={result} user={user} onExit={onExit} />;
+}
+
+function SingleSubjectSetup({ user, onStart, onExit }){
+  const [subjects,setSubjects] = useState([]);
+  const [subjectId,setSubjectId] = useState("");
+  const [topics,setTopics] = useState([]);
+  const [topicId,setTopicId] = useState("");
+  const [year,setYear] = useState("");
+  const [count,setCount] = useState(40);
+  const [minutes,setMinutes] = useState(40);
+  const [loading,setLoading] = useState(true);
+  const [err,setErr] = useState("");
+  const [preparing,setPreparing] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_subjects").select("*").order("name");
+    setSubjects(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  useEffect(()=>{
+    if(!subjectId){ setTopics([]); return; }
+    (async()=>{
+      const { data } = await sb.from("jamb_topics").select("*").eq("subject_id",subjectId).order("name");
+      setTopics(data||[]);
+    })();
+  },[subjectId]);
+
+  async function handleStart(){
+    if(!subjectId){ setErr("Please choose a subject."); return; }
+    setErr(""); setPreparing(true);
+    const subj = subjects.find(s=>s.id===subjectId);
+    let query = sb.from("jamb_questions").select("*").eq("subject_id", subjectId);
+    if(topicId) query = query.eq("topic_id", topicId);
+    if(year) query = query.eq("year", parseInt(year));
+    const { data: pool } = await query;
+    if(!pool || pool.length===0){ setErr("No questions found with those filters."); setPreparing(false); return; }
+    const plan = buildDifficultyPlan(count);
+    const seenIds = await getSeenQuestionIds(user.id, subjectId, pool.length);
+    const picked = pickQuestionsForPlan(pool, plan, seenIds);
+    if(picked.length===0){ setErr("Could not build a question set — try fewer questions or remove filters."); setPreparing(false); return; }
+    await recordSeenQuestions(user.id, subjectId, picked);
+    setPreparing(false);
+    onStart({ subjectData: [{ subject: subj, questions: picked, plan }], durationSeconds: minutes*60 });
+  }
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Single Subject Practice</h1>
+      <p className="muted">Focus on one subject. Same JAMB marking scheme applies.</p>
+      {err && <div className="error-box">{err}</div>}
+      <div className="card">
+        <div className="field">
+          <label>Subject</label>
+          <select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
+            <option value="">Select…</option>
+            {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div className="card-grid grid-3">
+          <div className="field"><label>Questions</label><input type="number" min="5" max="100" value={count} onChange={e=>setCount(parseInt(e.target.value)||40)} /></div>
+          <div className="field"><label>Year (optional)</label><input type="number" placeholder="e.g. 2022" value={year} onChange={e=>setYear(e.target.value)} /></div>
+          <div className="field">
+            <label>Topic (optional)</label>
+            <select value={topicId} onChange={e=>setTopicId(e.target.value)} disabled={!subjectId}>
+              <option value="">All topics</option>
+              {topics.map(t=> <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="field"><label>Time (minutes)</label><input type="number" min="5" value={minutes} onChange={e=>setMinutes(parseInt(e.target.value)||40)} /></div>
+        <button className="btn-primary" onClick={handleStart} disabled={preparing}>{preparing?<span className="spinner"></span>:"Start practice"}</button>
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// WEEKLY MOCK CHALLENGE
+// Same structure as Mock Exam, but: only open Sat 10:00-12:00, one
+// attempt per user per week saved, leaderboard visible after 12:01PM.
+// =====================================================================
+function WeeklyChallengeFlow({ user, onExit }){
+  const [stage,setStage] = useState("check"); // check | setup | exam | results | closed | already_done
+  const [bundle,setBundle] = useState(null);
+  const [result,setResult] = useState(null);
+  const [windowInfo,setWindowInfo] = useState(null);
+  const [existingAttempt,setExistingAttempt] = useState(null);
+  const [loading,setLoading] = useState(true);
+
+  useEffect(()=>{ (async()=>{
+    const win = getChallengeWindow();
+    setWindowInfo(win);
+    const now = new Date();
+    const isOpen = now >= win.start && now <= win.end;
+    if(!isOpen){ setStage("closed"); setLoading(false); return; }
+    const { data } = await sb.from("jamb_attempts").select("*").eq("user_id",user.id).eq("mode","weekly_challenge").eq("challenge_week", win.weekKey).maybeSingle();
+    if(data){ setExistingAttempt(data); setStage("already_done"); setLoading(false); return; }
+    setStage("setup");
+    setLoading(false);
+  })(); },[]);
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  if(stage==="closed") return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Weekly Mock Challenge</h1>
+      <div className="card empty-state">
+        <p>The challenge runs every <strong>Saturday, 10:00AM – 12:00PM</strong>.</p>
+        <p className="muted">Next window opens: {windowInfo?.start?.toLocaleString()}</p>
+      </div>
+    </div>
+  );
+
+  if(stage==="already_done") return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Weekly Mock Challenge</h1>
+      <div className="card">
+        <p>You've already submitted this week's challenge.</p>
+        <p><strong>Your score:</strong> {existingAttempt.total_score} / {existingAttempt.max_score}</p>
+        <p className="muted">{new Date() < windowInfo.end ? "The leaderboard opens at 12:01PM today." : "Check the leaderboard tab to see everyone's results."}</p>
+      </div>
+    </div>
+  );
+
+  if(stage==="setup") return <WeeklyChallengeSetup user={user} windowInfo={windowInfo} onStart={(b)=>{setBundle(b); setStage("exam");}} onExit={onExit} />;
+  if(stage==="exam") return <MultiSubjectExam bundle={bundle} user={user} mode="weekly_challenge" challengeWeek={windowInfo.weekKey} onFinish={(r)=>{setResult(r); setStage("results");}} />;
+  if(stage==="results") return <MultiSubjectResults result={result} user={user} onExit={onExit} />;
+}
+
+function WeeklyChallengeSetup({ user, windowInfo, onStart, onExit }){
+  const [subjects,setSubjects] = useState([]);
+  const [chosen,setChosen] = useState([]);
+  const [loading,setLoading] = useState(true);
+  const [err,setErr] = useState("");
+  const [preparing,setPreparing] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_subjects").select("*").order("name");
+    setSubjects(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  const english = subjects.find(s=>s.is_compulsory);
+  const others = subjects.filter(s=>!s.is_compulsory);
+
+  function toggle(id){
+    setChosen(prev=>{
+      if(prev.includes(id)) return prev.filter(x=>x!==id);
+      if(prev.length>=3){ setErr("Choose exactly 3 subjects besides English."); return prev; }
+      setErr(""); return [...prev,id];
+    });
+  }
+
+  async function handleStart(){
+    if(!english){ setErr("English subject missing."); return; }
+    if(chosen.length!==3){ setErr("Please choose exactly 3 subjects."); return; }
+    setErr(""); setPreparing(true);
+    const subjectPlan = [{ subject:english, questionCount:60 }, ...chosen.map(id=>({ subject: subjects.find(s=>s.id===id), questionCount:40 }))];
+    const subjectData = [];
+    for(const sp of subjectPlan){
+      const { data: pool } = await sb.from("jamb_questions").select("*").eq("subject_id", sp.subject.id);
+      if(!pool || pool.length===0){ setErr(`No questions found for ${sp.subject.name} yet.`); setPreparing(false); return; }
+      const plan = buildDifficultyPlan(sp.questionCount);
+      const seenIds = await getSeenQuestionIds(user.id, sp.subject.id, pool.length);
+      const picked = pickQuestionsForPlan(pool, plan, seenIds);
+      await recordSeenQuestions(user.id, sp.subject.id, picked);
+      subjectData.push({ subject: sp.subject, questions: picked, plan });
+    }
+    setPreparing(false);
+    const remainingMs = windowInfo.end - new Date();
+    const remainingSeconds = Math.max(Math.floor(remainingMs/1000), 60);
+    const durationSeconds = Math.min(2*3600, remainingSeconds);
+    onStart({ subjectData, durationSeconds });
+  }
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Weekly Mock Challenge</h1>
+      <p className="muted">English (60Q) is compulsory. Choose 3 more subjects (40Q each). You must submit before 12:00PM today.</p>
+      {err && <div className="error-box">{err}</div>}
+      <div className="card">
+        <div className="field"><label>Compulsory subject</label><span className="tag">{english?.name}</span></div>
+        <div className="field">
+          <label>Choose 3 other subjects ({chosen.length}/3)</label>
+          <div className="flex-row">
+            {others.map(s=> <span key={s.id} className={"subject-pill"+(chosen.includes(s.id)?" active":"")} onClick={()=>toggle(s.id)}>{s.name}</span>)}
+          </div>
+        </div>
+        <button className="btn-primary" onClick={handleStart} disabled={preparing}>{preparing?<span className="spinner"></span>:"Start challenge"}</button>
+      </div>
+    </div>
+  );
+}
+
+function LeaderboardScreen({ onExit }){
+  const [entries,setEntries] = useState([]);
+  const [loading,setLoading] = useState(true);
+  const [weekKey,setWeekKey] = useState("");
+  const [isLocked,setIsLocked] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const win = getChallengeWindow();
+    // show the most recently completed window's leaderboard
+    const now = new Date();
+    let targetWeek = win.weekKey;
+    let unlockTime = win.end;
+    if(now < win.end){
+      // current week's window hasn't ended yet, show previous week instead if locked
+      const prevStart = new Date(win.start); prevStart.setDate(prevStart.getDate()-7);
+      const prevEnd = new Date(win.end); prevEnd.setDate(prevEnd.getDate()-7);
+      targetWeek = getISOWeek(prevStart);
+      unlockTime = prevEnd;
+    }
+    setWeekKey(targetWeek);
+    const locked = now < win.end && now >= win.start; // locked during the live window
+    setIsLocked(false);
+    const { data } = await sb.from("jamb_attempts").select("*, jamb_users(full_name)").eq("mode","weekly_challenge").eq("challenge_week", targetWeek).order("total_score",{ascending:false});
+    setEntries(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Weekly Challenge Leaderboard</h1>
+      <p className="muted">Week: {weekKey}</p>
+      {entries.length===0 && <div className="empty-state">No results yet for this week.</div>}
+      {entries.length>0 && (
+        <div className="card">
+          <table>
+            <thead><tr><th>Rank</th><th>Name</th><th>Score</th></tr></thead>
+            <tbody>
+              {entries.map((e,i)=>(
+                <tr key={e.id}><td>{i+1}</td><td>{e.jamb_users?.full_name||"—"}</td><td>{e.total_score} / {e.max_score}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// HISTORY
+// =====================================================================
+function HistoryScreen({ user, onExit }){
+  const [attempts,setAttempts] = useState([]);
+  const [loading,setLoading] = useState(true);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_attempts").select("*").eq("user_id",user.id).order("submitted_at",{ascending:false});
+    setAttempts(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Practice History</h1>
+      {attempts.length===0 && <div className="empty-state">No attempts yet.</div>}
+      {attempts.length>0 && (
+        <div className="card">
+          <table>
+            <thead><tr><th>Date</th><th>Mode</th><th>Score</th><th>Subjects</th></tr></thead>
+            <tbody>
+              {attempts.map(a=>(
+                <tr key={a.id}>
+                  <td>{a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : "—"}</td>
+                  <td>{({mock:"Mock",practice:"Practice",single_subject:"Single Subject",weekly_challenge:"Weekly Challenge"})[a.mode]||a.mode}</td>
+                  <td>{a.total_score ?? "—"} / {a.max_score ?? "—"}</td>
+                  <td>{(a.details?.perSubject||[]).map(s=>s.code).join(", ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// ADMIN PANEL
+// =====================================================================
+function AdminGate({ isAdmin, setIsAdmin, onExit }){
+  const [code,setCode] = useState("");
+  const [err,setErr] = useState("");
+
+  function handleSubmit(e){
+    e.preventDefault();
+    if(code.trim() === ADMIN_CODE){ setIsAdmin(true); setErr(""); }
+    else setErr("Incorrect admin code.");
+  }
+
+  if(isAdmin) return <AdminDashboard onExit={onExit} />;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <div className="center-screen" style={{minHeight:"40vh"}}>
+        <div className="card auth-card">
+          <div className="eyebrow">Restricted</div>
+          <h2>Admin access</h2>
+          {err && <div className="error-box">{err}</div>}
+          <form onSubmit={handleSubmit}>
+            <div className="field"><label>Admin code</label><input type="password" value={code} onChange={e=>setCode(e.target.value)} /></div>
+            <button className="btn-primary" style={{width:"100%"}}>Enter</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminDashboard({ onExit }){
+  const [tab,setTab] = useState("add_single");
+
+  return (
+    <div>
+      <div className="flex-between no-print">
+        <h1>Admin Panel — JAMB App</h1>
+        <button className="btn-ghost" onClick={onExit}>← Exit admin</button>
+      </div>
+      <div className="flex-row" style={{marginBottom:"1.2em",flexWrap:"wrap"}}>
+        <button className={tab==="add_single"?"btn-primary":"btn-secondary"} onClick={()=>setTab("add_single")}>Add Single Question</button>
+        <button className={tab==="bulk"?"btn-primary":"btn-secondary"} onClick={()=>setTab("bulk")}>Bulk Parser</button>
+        <button className={tab==="manage"?"btn-primary":"btn-secondary"} onClick={()=>setTab("manage")}>Manage Questions</button>
+        <button className={tab==="users"?"btn-primary":"btn-secondary"} onClick={()=>setTab("users")}>Users</button>
+        <button className={tab==="attempts"?"btn-primary":"btn-secondary"} onClick={()=>setTab("attempts")}>All Attempts</button>
+      </div>
+      {tab==="add_single" && <AdminAddSingle />}
+      {tab==="bulk" && <AdminBulkParser />}
+      {tab==="manage" && <AdminManageQuestions />}
+      {tab==="users" && <AdminUsers />}
+      {tab==="attempts" && <AdminAttempts />}
+    </div>
+  );
+}
+
+function useJambSubjectsAndTopics(){
+  const [subjects,setSubjects] = useState([]);
+  const [topicsBySubject,setTopicsBySubject] = useState({});
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_subjects").select("*").order("name");
+    setSubjects(data||[]);
+  })(); },[]);
+  async function loadTopics(subjectId){
+    const { data } = await sb.from("jamb_topics").select("*").eq("subject_id",subjectId).order("name");
+    setTopicsBySubject(prev=>({...prev,[subjectId]:data||[]}));
+    return data||[];
+  }
+  async function getOrCreateTopic(subjectId, name){
+    if(!name || !name.trim()) return null;
+    const trimmed = name.trim();
+    const existing = (topicsBySubject[subjectId]||[]).find(t=>t.name.toLowerCase()===trimmed.toLowerCase());
+    if(existing) return existing.id;
+    const { data, error } = await sb.from("jamb_topics").insert({ subject_id:subjectId, name:trimmed }).select().single();
+    if(error){ console.error(error); return null; }
+    setTopicsBySubject(prev=>({...prev,[subjectId]:[...(prev[subjectId]||[]),data]}));
+    return data.id;
+  }
+  return { subjects, topicsBySubject, loadTopics, getOrCreateTopic };
+}
+
+// ---------------------------------------------------------------------
+// ADMIN: Add single question (with year + difficulty)
+// ---------------------------------------------------------------------
+function AdminAddSingle(){
+  const { subjects, topicsBySubject, loadTopics, getOrCreateTopic } = useJambSubjectsAndTopics();
+  const [subjectId,setSubjectId] = useState("");
+  const [topicName,setTopicName] = useState("");
+  const [year,setYear] = useState("");
+  const [difficulty,setDifficulty] = useState("moderate");
+  const [questionText,setQuestionText] = useState("");
+  const [options,setOptions] = useState({A:"",B:"",C:"",D:"",E:""});
+  const [correct,setCorrect] = useState("A");
+  const [explanation,setExplanation] = useState("");
+  const [file,setFile] = useState(null);
+  const [msg,setMsg] = useState("");
+  const [loading,setLoading] = useState(false);
+
+  useEffect(()=>{ if(subjectId) loadTopics(subjectId); },[subjectId]);
+
+  async function handleSubmit(){
+    setMsg("");
+    if(!subjectId || !questionText.trim() || !options.A.trim() || !options.B.trim() || !options.C.trim() || !options.D.trim()){
+      setMsg("Please fill subject, question text, and at least options A–D.");
+      return;
+    }
+    setLoading(true);
+    let image_url = null;
+    if(file) image_url = await uploadImage(file);
+    const topic_id = await getOrCreateTopic(subjectId, topicName);
+    const { error } = await sb.from("jamb_questions").insert({
+      subject_id: subjectId, topic_id, year: year?parseInt(year):null, difficulty,
+      question_text: questionText.trim(), image_url,
+      option_a: options.A, option_b: options.B, option_c: options.C, option_d: options.D,
+      option_e: options.E.trim() || null, correct_option: correct, explanation: explanation.trim() || null
+    });
+    setLoading(false);
+    if(error){ setMsg("Could not save question."); console.error(error); return; }
+    setMsg("Question added.");
+    setQuestionText(""); setOptions({A:"",B:"",C:"",D:"",E:""}); setExplanation(""); setFile(null); setYear("");
+  }
+
+  return (
+    <div className="card">
+      <h3>Add a question</h3>
+      {msg && <div className={msg.includes("added")?"success-box":"error-box"}>{msg}</div>}
+      <div className="card-grid grid-2">
+        <div className="field">
+          <label>Subject</label>
+          <select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
+            <option value="">Select…</option>
+            {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label>Topic (type new or existing)</label>
+          <input value={topicName} onChange={e=>setTopicName(e.target.value)} list="topic-suggestions" />
+          <datalist id="topic-suggestions">
+            {(topicsBySubject[subjectId]||[]).map(t=> <option key={t.id} value={t.name} />)}
+          </datalist>
+        </div>
+      </div>
+      <div className="card-grid grid-2">
+        <div className="field">
+          <label>Year (which JAMB year this question is from)</label>
+          <input type="number" placeholder="e.g. 2022" value={year} onChange={e=>setYear(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>Difficulty</label>
+          <select value={difficulty} onChange={e=>setDifficulty(e.target.value)}>
+            <option value="easy">Easy</option>
+            <option value="moderate">Moderate</option>
+            <option value="difficult">Difficult</option>
+          </select>
+        </div>
+      </div>
+      <div className="field"><label>Question</label><textarea rows="3" value={questionText} onChange={e=>setQuestionText(e.target.value)}></textarea></div>
+      <div className="field"><label>Picture / diagram (optional)</label><input type="file" accept="image/*" onChange={e=>setFile(e.target.files[0])} /></div>
+      <div className="card-grid grid-2">
+        {["A","B","C","D","E"].map(label=>(
+          <div className="field" key={label}>
+            <label>Option {label} {label==="E" && "(optional)"}</label>
+            <input value={options[label]} onChange={e=>setOptions(o=>({...o,[label]:e.target.value}))} />
+          </div>
+        ))}
+        <div className="field">
+          <label>Correct option</label>
+          <select value={correct} onChange={e=>setCorrect(e.target.value)}>
+            {["A","B","C","D","E"].map(l=> <option key={l} value={l}>{l}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field"><label>Explanation (optional)</label><textarea rows="2" value={explanation} onChange={e=>setExplanation(e.target.value)}></textarea></div>
+      <button className="btn-primary" onClick={handleSubmit} disabled={loading}>{loading?<span className="spinner"></span>:"Save question"}</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// ADMIN: Bulk Parser (objective only, with Year + Difficulty)
+// Format per question block:
+// Subject:
+// Topic:
+// Year:
+// Difficulty:
+// Question:
+// Option A
+// Option B
+// Option C
+// Option D
+// Option E
+// Answer:
+// Explanation:
+// ---------------------------------------------------------------------
+function parseBulkJamb(raw){
+  const blocks = raw.split(/\n\s*\n+/).map(b=>b.trim()).filter(Boolean);
+  const parsed = [];
+  const problems = [];
+  blocks.forEach((block, bi)=>{
+    const lines = block.split("\n").map(l=>l.trim()).filter(Boolean);
+    const get = (prefix) => {
+      const line = lines.find(l=> l.toLowerCase().startsWith(prefix.toLowerCase()));
+      return line ? line.slice(line.indexOf(":")+1).trim() : "";
+    };
+    const subject = get("Subject:");
+    const topic = get("Topic:");
+    const yearRaw = get("Year:");
+    const year = yearRaw ? parseInt(yearRaw.replace(/[^\d]/g,"")) : null;
+    let difficulty = get("Difficulty:").toLowerCase();
+    if(!["easy","moderate","difficult"].includes(difficulty)) difficulty = "moderate";
+    const question = get("Question:");
+    const answer = get("Answer:").toUpperCase().replace(/[^A-E]/g,"");
+    const explanation = get("Explanation:");
+    const opts = {};
+    ["A","B","C","D","E"].forEach(label=>{
+      const line = lines.find(l=> new RegExp(`^Option\\s*${label}\\b`, "i").test(l));
+      if(line) opts[label] = line.replace(new RegExp(`^Option\\s*${label}[:\\.\\)]?\\s*`,"i"),"").trim();
+    });
+    if(!subject || !question || !opts.A || !opts.B || !opts.C || !opts.D || !answer){
+      problems.push(`Block ${bi+1}: missing required field(s) (need Subject, Question, Option A-D, Answer).`);
+      return;
+    }
+    parsed.push({ subject, topic, year, difficulty, question, opts, answer, explanation });
+  });
+  return { parsed, problems };
+}
+
+function AdminBulkParser(){
+  const [raw,setRaw] = useState("");
+  const [preview,setPreview] = useState(null);
+  const [problems,setProblems] = useState([]);
+  const [saving,setSaving] = useState(false);
+  const [msg,setMsg] = useState("");
+
+  function handlePreview(){
+    const { parsed, problems } = parseBulkJamb(raw);
+    setPreview(parsed); setProblems(problems); setMsg("");
+  }
+
+  async function handleSaveAll(){
+    if(!preview || preview.length===0) return;
+    setSaving(true); setMsg("");
+    const { data: subjects } = await sb.from("jamb_subjects").select("*");
+    const { data: allTopics } = await sb.from("jamb_topics").select("*");
+    let topicsCache = allTopics || [];
+    let saved=0, failed=0;
+    for(const item of preview){
+      const subj = (subjects||[]).find(s=> s.code.toLowerCase()===item.subject.toLowerCase().replace(/\s+/g,"") || s.name.toLowerCase()===item.subject.toLowerCase());
+      if(!subj){ failed++; continue; }
+      let topic_id = null;
+      if(item.topic){
+        let t = topicsCache.find(t=>t.subject_id===subj.id && t.name.toLowerCase()===item.topic.toLowerCase());
+        if(!t){
+          const { data: newTopic } = await sb.from("jamb_topics").insert({ subject_id:subj.id, name:item.topic }).select().single();
+          if(newTopic){ t = newTopic; topicsCache.push(newTopic); }
+        }
+        topic_id = t ? t.id : null;
+      }
+      const { error } = await sb.from("jamb_questions").insert({
+        subject_id: subj.id, topic_id, year: item.year, difficulty: item.difficulty,
+        question_text: item.question,
+        option_a: item.opts.A, option_b: item.opts.B, option_c: item.opts.C, option_d: item.opts.D,
+        option_e: item.opts.E || null, correct_option: item.answer, explanation: item.explanation || null
+      });
+      if(error){ failed++; console.error(error); } else saved++;
+    }
+    setSaving(false);
+    setMsg(`Saved ${saved} question(s).${failed>0?` ${failed} failed (check subject names match exactly).`:""}`);
+    if(failed===0){ setRaw(""); setPreview(null); }
+  }
+
+  return (
+    <div className="card">
+      <h3>Bulk Parser</h3>
+      <p className="muted">Paste multiple questions, separated by a blank line, in this format. Year and Difficulty are optional (defaults to "moderate" if left out).</p>
+      <pre style={{background:"#f5f2e8",padding:"1em",borderRadius:"8px",fontSize:".82rem",overflowX:"auto"}}>
+{`Subject: Mathematics
+Topic: Algebra
+Year: 2022
+Difficulty: difficult
+Question: Solve for x: 2x + 5 = 17
+Option A: 5
+Option B: 6
+Option C: 7
+Option D: 8
+Option E: 9
+Answer: B
+Explanation: 2x = 12, so x = 6`}
+      </pre>
+      <div className="field"><label>Paste your questions</label><textarea rows="10" value={raw} onChange={e=>setRaw(e.target.value)}></textarea></div>
+      <div className="flex-row">
+        <button className="btn-secondary" onClick={handlePreview}>Preview</button>
+        {preview && preview.length>0 && <button className="btn-primary" onClick={handleSaveAll} disabled={saving}>{saving?<span className="spinner"></span>:`Save all ${preview.length} question(s)`}</button>}
+      </div>
+      {msg && <div className="success-box" style={{marginTop:"1em"}}>{msg}</div>}
+      {problems.length>0 && <div className="error-box" style={{marginTop:"1em"}}>{problems.map((p,i)=><div key={i}>{p}</div>)}</div>}
+      {preview && (
+        <div style={{marginTop:"1em"}}>
+          <p className="muted">{preview.length} question(s) ready to save:</p>
+          {preview.map((p,i)=>(
+            <div key={i} className="card" style={{padding:"1em"}}>
+              <div className="flex-between">
+                <p style={{fontWeight:600,margin:0}}>{p.subject} {p.topic && `· ${p.topic}`}</p>
+                <span className={"diff-badge diff-"+p.difficulty}>{p.difficulty}</span>
+              </div>
+              <p>{p.question}</p>
+              <p className="muted" style={{fontSize:".85rem"}}>Year: {p.year||"—"} · Answer: {p.answer}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// ADMIN: Manage / delete questions
+// ---------------------------------------------------------------------
+function AdminManageQuestions(){
+  const [subjects,setSubjects] = useState([]);
+  const [subjectId,setSubjectId] = useState("");
+  const [questions,setQuestions] = useState([]);
+  const [loading,setLoading] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_subjects").select("*").order("name");
+    setSubjects(data||[]);
+  })(); },[]);
+
+  useEffect(()=>{
+    if(!subjectId){ setQuestions([]); return; }
+    loadQuestions(subjectId);
+  },[subjectId]);
+
+  async function loadQuestions(subjId){
+    setLoading(true);
+    const { data } = await sb.from("jamb_questions").select("*").eq("subject_id", subjId).order("created_at",{ascending:false});
+    setQuestions(data||[]);
+    setLoading(false);
+  }
+
+  async function handleDelete(id){
+    await sb.from("jamb_questions").delete().eq("id", id);
+    loadQuestions(subjectId);
+  }
+
+  return (
+    <div className="card">
+      <h3>Manage questions</h3>
+      <div className="field">
+        <label>Subject</label>
+        <select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
+          <option value="">Select…</option>
+          {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </div>
+      {loading && <div className="empty-state"><span className="spinner"></span></div>}
+      {!loading && subjectId && questions.length===0 && <div className="empty-state">No questions yet for this subject.</div>}
+      {!loading && subjectId && questions.length>0 && <p className="muted">{questions.length} question(s) total.</p>}
+      {questions.map(q=>(
+        <div key={q.id} className="card" style={{padding:"1em"}}>
+          <div className="flex-between">
+            <p style={{fontWeight:600,flex:1}}>{q.question_text}</p>
+            <button className="btn-warn" onClick={()=>handleDelete(q.id)}>Delete</button>
+          </div>
+          {q.image_url && <img className="q-image" src={q.image_url} style={{maxWidth:"200px"}} alt="" />}
+          <div className="flex-row">
+            <span className={"diff-badge diff-"+q.difficulty}>{q.difficulty}</span>
+            {q.year && <span className="tag">Year {q.year}</span>}
+            <span className="muted" style={{fontSize:".85rem"}}>Correct: {q.correct_option}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// ADMIN: Users list
+// ---------------------------------------------------------------------
+function AdminUsers(){
+  const [users,setUsers] = useState([]);
+  const [loading,setLoading] = useState(true);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_users").select("id, full_name, email, phone, created_at").order("created_at",{ascending:false});
+    setUsers(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div className="card">
+      <h3>Registered users ({users.length})</h3>
+      {users.length===0 && <div className="empty-state">No users registered yet.</div>}
+      {users.length>0 && (
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Joined</th></tr></thead>
+          <tbody>
+            {users.map(u=>(
+              <tr key={u.id}>
+                <td>{u.full_name}</td><td>{u.email}</td><td>{u.phone}</td>
+                <td>{new Date(u.created_at).toLocaleDateString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// ADMIN: All attempts across all users
+// ---------------------------------------------------------------------
+function AdminAttempts(){
+  const [attempts,setAttempts] = useState([]);
+  const [loading,setLoading] = useState(true);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_attempts").select("*, jamb_users(full_name,email)").order("submitted_at",{ascending:false}).limit(300);
+    setAttempts(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div className="card">
+      <h3>All user attempts</h3>
+      {attempts.length===0 && <div className="empty-state">No attempts recorded yet.</div>}
+      {attempts.length>0 && (
+        <table>
+          <thead><tr><th>User</th><th>Mode</th><th>Score</th><th>Week</th><th>Date</th></tr></thead>
+          <tbody>
+            {attempts.map(a=>(
+              <tr key={a.id}>
+                <td>{a.jamb_users?.full_name || "—"}</td>
+                <td>{({mock:"Mock",practice:"Practice",single_subject:"Single Subject",weekly_challenge:"Weekly Challenge"})[a.mode]||a.mode}</td>
+                <td>{a.total_score ?? "—"} / {a.max_score ?? "—"}</td>
+                <td>{a.challenge_week || "—"}</td>
+                <td>{a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
