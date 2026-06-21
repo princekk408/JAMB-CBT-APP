@@ -265,27 +265,42 @@ function buildDifficultyPlan(totalQuestions){
 // Pick questions for a subject matching the required difficulty plan,
 // from a pool of already-fetched questions (grouped by difficulty).
 // seenIds: a Set of question IDs this user has already been served for
-// this subject. Unseen questions are always preferred; only once a
-// difficulty tier is fully exhausted (not enough unseen left) do
-// already-seen ones get reused to fill the remaining slots.
+// this subject. Unseen questions are always preferred. If a specific
+// DIFFICULTY TIER is fully exhausted (no unseen left in that tier, even
+// though other tiers may still have unseen questions), that tier's seen
+// history resets on its own -- this is more precise than resetting the
+// whole subject at once, since a person might burn through "difficult"
+// questions much faster than "easy" ones.
 function pickQuestionsForPlan(pool, plan, seenIds){
   seenIds = seenIds || new Set();
   const byDiff = { easy: [], moderate: [], difficult: [] };
   pool.forEach(q => { if(byDiff[q.difficulty]) byDiff[q.difficulty].push(q); });
 
   const picked = [];
+  const exhaustedTiers = [];
   ["difficult","moderate","easy"].forEach(diff=>{
     const need = plan[diff].count;
-    const all = byDiff[diff];
-    const unseen = all.filter(q => !seenIds.has(q.id)).sort(()=>Math.random()-0.5);
-    const seen = all.filter(q => seenIds.has(q.id)).sort(()=>Math.random()-0.5);
-    // prefer unseen; only dip into seen ones if unseen can't fill the need
+    let all = byDiff[diff];
+    let unseen = all.filter(q => !seenIds.has(q.id));
+    // this tier is exhausted: every question in it has been seen, but
+    // there are enough total to attempt a real rotation -- reset just
+    // this tier so the next pick can draw from the full tier again
+    if(unseen.length < need && all.length >= need && all.length > 0 && unseen.length < all.length){
+      const allSeenInTier = all.every(q => seenIds.has(q.id));
+      if(allSeenInTier){
+        exhaustedTiers.push(diff);
+        unseen = all.slice(); // tier reset: treat everything as available again
+      }
+    }
+    unseen = unseen.sort(()=>Math.random()-0.5);
+    const seen = all.filter(q => seenIds.has(q.id) && !unseen.includes(q)).sort(()=>Math.random()-0.5);
     let chosen = unseen.slice(0, need);
     if(chosen.length < need){
       chosen = chosen.concat(seen.slice(0, need - chosen.length));
     }
     chosen.forEach(q => picked.push({ ...q, _markValue: plan[diff].markEach }));
   });
+  picked._exhaustedTiers = exhaustedTiers;
   return picked.sort(()=>Math.random()-0.5);
 }
 
@@ -598,6 +613,8 @@ function MainApp({ user, onLogout, isAdmin, setIsAdmin }){
         <div className="brand"><span className="mark">J</span> JAMB Mock</div>
         <nav>
           <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={goHome}>Home</button>
+          <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={()=>setView("flashcards")}>Flashcards</button>
+          <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={()=>setView("notes")}>Notes</button>
           <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={()=>setView("history")}>History</button>
           <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={()=>setView("leaderboard")}>Leaderboard</button>
           <button className="btn-ghost" style={{color:"#f6f4ec"}} onClick={()=>setView("admin")}>Admin</button>
@@ -610,6 +627,8 @@ function MainApp({ user, onLogout, isAdmin, setIsAdmin }){
         {view==="practice" && <PracticeFlow user={user} onExit={goHome} />}
         {view==="single_subject" && <SingleSubjectFlow user={user} onExit={goHome} />}
         {view==="weekly_challenge" && <WeeklyChallengeFlow user={user} onExit={goHome} />}
+        {view==="flashcards" && <FlashcardsScreen user={user} onExit={goHome} />}
+        {view==="notes" && <NotesScreen user={user} onExit={goHome} />}
         {view==="history" && <HistoryScreen user={user} onExit={goHome} />}
         {view==="leaderboard" && <LeaderboardScreen onExit={goHome} />}
         {view==="admin" && <AdminGate isAdmin={isAdmin} setIsAdmin={setIsAdmin} onExit={goHome} />}
@@ -754,7 +773,7 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
   const [timeLeft,setTimeLeft] = useState(durationSeconds);
   const submittedRef = useRef(false);
 
-  const handleSubmit = useCallback(async ()=>{
+  const handleSubmit = useCallback(async (autoSubmitReason)=>{
     if(submittedRef.current) return;
     submittedRef.current = true;
     const perSubject = subjectData.map(sd=>{
@@ -765,29 +784,41 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
     const maxScore = perSubject.length * 100;
 
     const responses = [];
-    subjectData.forEach(sd=>{
-      sd.questions.forEach(q=>{
+    // Full snapshot per subject: every question with its options, the
+    // correct answer, explanation, what the user picked, and whether it
+    // was right -- so History can show this exact review later even if
+    // the admin edits or deletes the original question afterward.
+    const snapshotPerSubject = subjectData.map(sd=>{
+      const questionSnapshots = sd.questions.map(q=>{
         const sel = answers[q.id];
         const isCorrect = sel === q.correct_option;
         responses.push({ question_id:q.id, selected_option: sel||null, is_correct:isCorrect, marks_awarded: isCorrect? q._markValue : 0 });
+        return {
+          id:q.id, question_text:q.question_text, image_url:q.image_url||null,
+          option_a:q.option_a, option_b:q.option_b, option_c:q.option_c, option_d:q.option_d, option_e:q.option_e||null,
+          correct_option:q.correct_option, explanation:q.explanation||null, difficulty:q.difficulty,
+          selected_option: sel||null, is_correct:isCorrect, mark_value:q._markValue
+        };
       });
+      const { rawScore, correctCount, total } = scoreSubjectAttempt(sd.questions, answers);
+      return { code:sd.subject.code, name:sd.subject.name, rawScore, correct:correctCount, total, questions: questionSnapshots };
     });
 
     const { data: attempt } = await sb.from("jamb_attempts").insert({
       user_id:user.id, mode, challenge_week: challengeWeek || null,
       total_score: totalScore, max_score: maxScore,
       submitted_at: new Date().toISOString(), duration_seconds: durationSeconds-timeLeft,
-      details: { perSubject: perSubject.map(r=>({code:r.subject.code,name:r.subject.name,rawScore:r.rawScore,correct:r.correctCount,total:r.total})) }
+      details: { perSubject: snapshotPerSubject, autoSubmitted: autoSubmitReason || null }
     }).select().single();
     if(attempt){
       const rows = responses.map(r=>({...r, attempt_id: attempt.id}));
       await sb.from("jamb_attempt_responses").insert(rows);
     }
-    onFinish({ perSubject, totalScore, maxScore, subjectData, answers, attemptId: attempt?.id });
+    onFinish({ perSubject, totalScore, maxScore, subjectData, answers, attemptId: attempt?.id, snapshotPerSubject });
   },[subjectData, answers, mode, challengeWeek, user, durationSeconds, timeLeft, onFinish]);
 
   useEffect(()=>{
-    if(timeLeft<=0){ handleSubmit(); return; }
+    if(timeLeft<=0){ handleSubmit("time_up"); return; }
     const t = setTimeout(()=>setTimeLeft(s=>s-1),1000);
     return ()=>clearTimeout(t);
   },[timeLeft, handleSubmit]);
@@ -798,6 +829,7 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
   function switchSubject(i){ setSubjIndex(i); setQIndex(0); }
 
   return (
+    <AntiCheatWrapper onForceSubmit={()=>handleSubmit("left_screen")}>
     <div>
       <div className="flex-between no-print">
         <h2 style={{margin:0}}>{({mock:"Mock Exam",weekly_challenge:"Weekly Challenge",practice:"Practice"})[mode] || "Exam"}</h2>
@@ -829,20 +861,30 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
           ? <button className="btn-secondary" onClick={()=>setQIndex(i=>i+1)}>Next →</button>
           : (subjIndex < subjectData.length-1
               ? <button className="btn-secondary" onClick={()=>switchSubject(subjIndex+1)}>Next subject →</button>
-              : <button className="btn-primary" onClick={handleSubmit}>Submit exam</button>)}
+              : <button className="btn-primary" onClick={()=>handleSubmit("manual")}>Submit exam</button>)}
       </div>
     </div>
+    </AntiCheatWrapper>
   );
 }
 
 function MultiSubjectResults({ result, user, onExit }){
-  const { perSubject, totalScore, maxScore } = result;
+  const { totalScore, maxScore, snapshotPerSubject } = result;
+  return <AttemptReview perSubject={snapshotPerSubject} totalScore={totalScore} maxScore={maxScore} user={user} onExit={onExit} title="Mock Result" />;
+}
+
+// Shared review UI: score table + full question-by-question breakdown
+// with correct/incorrect highlighting and explanations. Used both right
+// after submitting and later from History (since perSubject snapshots
+// are stored permanently in jamb_attempts.details).
+function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title }){
+  const [subjFilter,setSubjFilter] = useState("all");
 
   function handlePrint(){ window.print(); }
   function handleSavePDF(){
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
-    doc.setFontSize(16); doc.text("JAMB Mock Result", 14, 18);
+    doc.setFontSize(16); doc.text(title || "JAMB Result", 14, 18);
     doc.setFontSize(11);
     doc.text(`Name: ${user.full_name}`, 14, 28);
     doc.text(`Date: ${new Date().toLocaleDateString()}`, 14, 35);
@@ -851,9 +893,9 @@ function MultiSubjectResults({ result, user, onExit }){
     doc.text("Subject", 14, y); doc.text("Score (/100)", 100, y); doc.text("Correct", 150, y);
     y += 6; doc.line(14,y,196,y); y += 6;
     perSubject.forEach(r=>{
-      doc.text(r.subject.name, 14, y);
+      doc.text(r.name, 14, y);
       doc.text(String(r.rawScore), 100, y);
-      doc.text(`${r.correctCount}/${r.total}`, 150, y);
+      doc.text(`${r.correct}/${r.total}`, 150, y);
       y += 7;
     });
     y += 4; doc.line(14,y,196,y); y += 8;
@@ -861,16 +903,18 @@ function MultiSubjectResults({ result, user, onExit }){
     doc.save(`${user.full_name.replace(/\s+/g,"_")}_jamb_result.pdf`);
   }
 
+  const visibleSubjects = subjFilter==="all" ? perSubject : perSubject.filter(s=>s.code===subjFilter);
+
   return (
     <div>
-      <h1>Mock Result</h1>
+      <h1>{title || "Result"}</h1>
       <div className="card">
         <p><strong>{user.full_name}</strong> · {new Date().toLocaleDateString()}</p>
         <table>
           <thead><tr><th>Subject</th><th>Score (/100)</th><th>Correct</th></tr></thead>
           <tbody>
             {perSubject.map(r=>(
-              <tr key={r.subject.id}><td>{r.subject.name}</td><td>{r.rawScore}</td><td>{r.correctCount}/{r.total}</td></tr>
+              <tr key={r.code}><td>{r.name}</td><td>{r.rawScore}</td><td>{r.correct}/{r.total}</td></tr>
             ))}
           </tbody>
         </table>
@@ -882,6 +926,44 @@ function MultiSubjectResults({ result, user, onExit }){
         <button className="btn-secondary" onClick={handleSavePDF}>Save as PDF</button>
         <button className="btn-primary" onClick={onExit}>Back to home</button>
       </div>
+
+      <div className="divider"></div>
+      <h2>Question Review</h2>
+      <p className="muted">See exactly what you answered, what was correct, and the explanation for each question.</p>
+      <div className="flex-row no-print" style={{marginBottom:"1em"}}>
+        <span className={"subject-pill"+(subjFilter==="all"?" active":"")} onClick={()=>setSubjFilter("all")}>All subjects</span>
+        {perSubject.map(s=> <span key={s.code} className={"subject-pill"+(subjFilter===s.code?" active":"")} onClick={()=>setSubjFilter(s.code)}>{s.name}</span>)}
+      </div>
+
+      {visibleSubjects.map(sd=>(
+        <div key={sd.code}>
+          <h3>{sd.name} — {sd.correct}/{sd.total} correct ({sd.rawScore}/100)</h3>
+          {sd.questions.map((q,i)=>{
+            const options = [["A",q.option_a],["B",q.option_b],["C",q.option_c],["D",q.option_d], ...(q.option_e?[["E",q.option_e]]:[])];
+            return (
+              <div key={q.id} className="card question-block">
+                <div className="flex-between">
+                  <p style={{fontWeight:600,flex:1}}>{i+1}. {q.question_text}</p>
+                  <span className={"diff-badge diff-"+q.difficulty}>{q.difficulty}</span>
+                </div>
+                {q.image_url && <img className="q-image" src={q.image_url} alt="" />}
+                {options.map(([label,text])=>{
+                  let cls = "option-row";
+                  if(label===q.correct_option) cls += " correct";
+                  else if(label===q.selected_option) cls += " incorrect";
+                  return <div key={label} className={cls}><span><strong>{label}.</strong> {text}</span></div>;
+                })}
+                {!q.selected_option && <p className="muted" style={{fontSize:".85rem"}}>You did not answer this question.</p>}
+                <p className="muted" style={{fontSize:".85rem"}}>
+                  {q.is_correct ? `Correct — earned ${Math.round(q.mark_value*100)/100} marks` : `Incorrect (0 marks)`}
+                </p>
+                {q.explanation && <p className="muted" style={{fontSize:".88rem",marginTop:".4em"}}><strong>Explanation:</strong> {q.explanation}</p>}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      <button className="btn-primary no-print" onClick={onExit}>Back to home</button>
     </div>
   );
 }
@@ -1284,24 +1366,47 @@ function LeaderboardScreen({ onExit }){
 function HistoryScreen({ user, onExit }){
   const [attempts,setAttempts] = useState([]);
   const [loading,setLoading] = useState(true);
+  const [viewing,setViewing] = useState(null); // attempt being reviewed in detail
+  const [confirmDeleteId,setConfirmDeleteId] = useState(null);
 
-  useEffect(()=>{ (async()=>{
+  async function load(){
+    setLoading(true);
     const { data } = await sb.from("jamb_attempts").select("*").eq("user_id",user.id).order("submitted_at",{ascending:false});
     setAttempts(data||[]);
     setLoading(false);
-  })(); },[]);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  async function handleDelete(id){
+    await sb.from("jamb_attempts").delete().eq("id", id);
+    setConfirmDeleteId(null);
+    load();
+  }
 
   if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  if(viewing){
+    const d = viewing.details || {};
+    return <AttemptReview
+      perSubject={d.perSubject || []}
+      totalScore={viewing.total_score}
+      maxScore={viewing.max_score}
+      user={user}
+      onExit={()=>setViewing(null)}
+      title={`${({mock:"Mock Exam",practice:"Practice",single_subject:"Single Subject Practice",weekly_challenge:"Weekly Challenge"})[viewing.mode]||viewing.mode} — ${new Date(viewing.submitted_at).toLocaleDateString()}`}
+    />;
+  }
 
   return (
     <div>
       <button className="btn-ghost" onClick={onExit}>← Back</button>
       <h1>Practice History</h1>
+      <p className="muted">View any past attempt exactly as you submitted it, including every question, your answers, and explanations.</p>
       {attempts.length===0 && <div className="empty-state">No attempts yet.</div>}
       {attempts.length>0 && (
         <div className="card">
           <table>
-            <thead><tr><th>Date</th><th>Mode</th><th>Score</th><th>Subjects</th></tr></thead>
+            <thead><tr><th>Date</th><th>Mode</th><th>Score</th><th>Subjects</th><th></th></tr></thead>
             <tbody>
               {attempts.map(a=>(
                 <tr key={a.id}>
@@ -1309,6 +1414,17 @@ function HistoryScreen({ user, onExit }){
                   <td>{({mock:"Mock",practice:"Practice",single_subject:"Single Subject",weekly_challenge:"Weekly Challenge"})[a.mode]||a.mode}</td>
                   <td>{a.total_score ?? "—"} / {a.max_score ?? "—"}</td>
                   <td>{(a.details?.perSubject||[]).map(s=>s.code).join(", ")}</td>
+                  <td>
+                    <div className="flex-row" style={{gap:".4em"}}>
+                      <button className="btn-ghost" onClick={()=>setViewing(a)} disabled={!a.details?.perSubject}>View</button>
+                      {confirmDeleteId===a.id
+                        ? <>
+                            <button className="btn-warn" onClick={()=>handleDelete(a.id)}>Confirm delete</button>
+                            <button className="btn-ghost" onClick={()=>setConfirmDeleteId(null)}>Cancel</button>
+                          </>
+                        : <button className="btn-ghost" style={{color:"var(--warn)"}} onClick={()=>setConfirmDeleteId(a.id)}>Delete</button>}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1769,6 +1885,231 @@ function AdminAttempts(){
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+// =====================================================================
+// ANTI-CHEAT WRAPPER
+// Wraps any exam screen. If the user switches tabs/apps or minimizes
+// the browser (visibilitychange -> hidden), a 3-second countdown shows
+// the moment they're noticed to be gone. If they don't return before it
+// hits 0, onForceSubmit() fires automatically with whatever they've
+// answered so far. Returning in time cancels the countdown with no
+// penalty.
+// =====================================================================
+function AntiCheatWrapper({ children, onForceSubmit }){
+  const [countdown,setCountdown] = useState(null); // null = not counting down
+  const triggeredRef = useRef(false);
+
+  useEffect(()=>{
+    function handleVisibilityChange(){
+      if(document.hidden){
+        setCountdown(3);
+      } else {
+        setCountdown(null); // came back in time, cancel
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return ()=> document.removeEventListener("visibilitychange", handleVisibilityChange);
+  },[]);
+
+  useEffect(()=>{
+    if(countdown === null) return;
+    if(countdown <= 0){
+      if(!triggeredRef.current){
+        triggeredRef.current = true;
+        onForceSubmit();
+      }
+      return;
+    }
+    const t = setTimeout(()=> setCountdown(c => c - 1), 1000);
+    return ()=> clearTimeout(t);
+  },[countdown, onForceSubmit]);
+
+  return (
+    <div>
+      {children}
+      {countdown !== null && countdown > 0 && (
+        <div className="modal-overlay">
+          <div className="modal-box" style={{textAlign:"center"}}>
+            <h2 style={{color:"var(--warn)"}}>You left the exam screen</h2>
+            <p>Return now or your exam will be submitted automatically in:</p>
+            <div style={{fontSize:"3rem",fontWeight:700,fontFamily:"'Iowan Old Style',Georgia,serif",color:"var(--warn)"}}>{countdown}</div>
+            <p className="muted">Switching tabs, apps, or minimizing during a session counts as leaving the screen.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// FLASHCARDS
+// =====================================================================
+function FlashcardsScreen({ user, onExit }){
+  const [subjects,setSubjects] = useState([]);
+  const [subjectId,setSubjectId] = useState("");
+  const [topics,setTopics] = useState([]);
+  const [topicId,setTopicId] = useState("");
+  const [cards,setCards] = useState([]);
+  const [idx,setIdx] = useState(0);
+  const [flipped,setFlipped] = useState(false);
+  const [points,setPoints] = useState(0);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("jamb_subjects").select("*").order("name");
+    setSubjects(data||[]);
+  })(); },[]);
+
+  useEffect(()=>{
+    if(!subjectId){ setTopics([]); return; }
+    (async()=>{
+      const { data } = await sb.from("jamb_topics").select("*").eq("subject_id", subjectId).order("name");
+      setTopics(data||[]);
+    })();
+  },[subjectId]);
+
+  async function loadCards(){
+    if(!topicId) return;
+    const { data } = await sb.from("jamb_questions").select("*").eq("topic_id", topicId);
+    setCards((data||[]).sort(()=>Math.random()-0.5));
+    setIdx(0); setFlipped(false);
+    const { data: fp } = await sb.from("jamb_flashcard_progress").select("*").eq("user_id",user.id).eq("topic_id",topicId).maybeSingle();
+    setPoints(fp?.points || 0);
+  }
+
+  async function markKnew(){
+    const newPoints = points + 5;
+    setPoints(newPoints);
+    await sb.from("jamb_flashcard_progress").upsert({ user_id:user.id, topic_id:topicId, points:newPoints, updated_at:new Date().toISOString() }, { onConflict:"user_id,topic_id" });
+    next();
+  }
+  function next(){ setFlipped(false); setIdx(i=> (i+1) % Math.max(cards.length,1)); }
+
+  const card = cards[idx];
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Flashcards</h1>
+      <div className="card">
+        <div className="card-grid grid-2">
+          <div className="field">
+            <label>Subject</label>
+            <select value={subjectId} onChange={e=>{setSubjectId(e.target.value); setTopicId(""); setCards([]);}}>
+              <option value="">Select…</option>
+              {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Topic</label>
+            <select value={topicId} onChange={e=>setTopicId(e.target.value)} disabled={!subjectId}>
+              <option value="">Select…</option>
+              {topics.map(t=> <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <button className="btn-primary" onClick={loadCards} disabled={!topicId}>Load flashcards</button>
+      </div>
+
+      {cards.length>0 && card && (
+        <div className="card" style={{textAlign:"center"}}>
+          <span className="tag">★ {points} points</span>
+          <p className="muted" style={{marginTop:"1em"}}>Card {idx+1} of {cards.length}</p>
+          <div style={{minHeight:"120px",display:"flex",alignItems:"center",justifyContent:"center",padding:"1em"}}>
+            <p style={{fontSize:"1.15rem",fontWeight:600}}>
+              {flipped ? `Answer: ${card.correct_option} — ${ {A:card.option_a,B:card.option_b,C:card.option_c,D:card.option_d,E:card.option_e}[card.correct_option] }` : card.question_text}
+            </p>
+          </div>
+          <div className="flex-row" style={{justifyContent:"center"}}>
+            <button className="btn-secondary" onClick={()=>setFlipped(f=>!f)}>{flipped ? "Show question" : "Show answer"}</button>
+            <button className="btn-secondary" onClick={next}>Skip</button>
+            <button className="btn-primary" onClick={markKnew}>I knew this (+5)</button>
+          </div>
+        </div>
+      )}
+      {cards.length===0 && topicId && <div className="empty-state">No questions found for this topic yet.</div>}
+    </div>
+  );
+}
+
+// =====================================================================
+// NOTES
+// =====================================================================
+function NotesScreen({ user, onExit }){
+  const [notes,setNotes] = useState([]);
+  const [subjects,setSubjects] = useState([]);
+  const [title,setTitle] = useState("");
+  const [content,setContent] = useState("");
+  const [subjectId,setSubjectId] = useState("");
+  const [file,setFile] = useState(null);
+  const [loading,setLoading] = useState(false);
+  const [err,setErr] = useState("");
+
+  async function load(){
+    const { data } = await sb.from("jamb_notes").select("*, jamb_subjects(name)").eq("user_id", user.id).order("created_at",{ascending:false});
+    setNotes(data||[]);
+  }
+  useEffect(()=>{
+    load();
+    (async()=>{ const { data } = await sb.from("jamb_subjects").select("*").order("name"); setSubjects(data||[]); })();
+  },[]);
+
+  async function handleAdd(){
+    if(!content.trim() && !file){ setErr("Add some text or a picture first."); return; }
+    setErr(""); setLoading(true);
+    let image_url = null;
+    if(file) image_url = await uploadImage(file);
+    const { error } = await sb.from("jamb_notes").insert({
+      user_id:user.id, subject_id: subjectId || null, title: title.trim() || null, content: content.trim() || null, image_url
+    });
+    setLoading(false);
+    if(error){ setErr("Could not save note."); return; }
+    setTitle(""); setContent(""); setFile(null); setSubjectId("");
+    load();
+  }
+
+  async function handleDelete(id){
+    await sb.from("jamb_notes").delete().eq("id", id);
+    load();
+  }
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>My Notes</h1>
+      <p className="muted">Jot down anything worth remembering — text, or a picture of a diagram.</p>
+      {err && <div className="error-box">{err}</div>}
+      <div className="card">
+        <div className="field"><label>Title (optional)</label><input value={title} onChange={e=>setTitle(e.target.value)} /></div>
+        <div className="field">
+          <label>Subject (optional)</label>
+          <select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
+            <option value="">General</option>
+            {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div className="field"><label>Note</label><textarea rows="4" value={content} onChange={e=>setContent(e.target.value)}></textarea></div>
+        <div className="field"><label>Attach a picture (optional)</label><input type="file" accept="image/*" onChange={e=>setFile(e.target.files[0])} /></div>
+        <button className="btn-primary" onClick={handleAdd} disabled={loading}>{loading?<span className="spinner"></span>:"Save note"}</button>
+      </div>
+
+      {notes.length===0 && <div className="empty-state">No notes yet. Add your first one above.</div>}
+      {notes.map(n=>(
+        <div key={n.id} className="card">
+          <div className="flex-between">
+            <div>
+              {n.title && <h3 style={{margin:0}}>{n.title}</h3>}
+              {n.jamb_subjects?.name && <span className="tag">{n.jamb_subjects.name}</span>}
+            </div>
+            <button className="btn-ghost" onClick={()=>handleDelete(n.id)}>Delete</button>
+          </div>
+          {n.content && <p style={{marginTop:".6em"}}>{n.content}</p>}
+          {n.image_url && <img className="q-image" src={n.image_url} alt="note attachment" />}
+          <p className="muted" style={{fontSize:".78rem"}}>{new Date(n.created_at).toLocaleString()}</p>
+        </div>
+      ))}
     </div>
   );
 }
