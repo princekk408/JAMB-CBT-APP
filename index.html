@@ -234,13 +234,14 @@ function fmtTime(totalSeconds){
   return `${m}:${String(s).padStart(2,"0")}`;
 }
 
-async function uploadImage(file){
+async function uploadImage(file, bucket){
   if(!file) return null;
+  bucket = bucket || "jamb-images";
   const ext = file.name.split(".").pop();
   const path = `uploads/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`;
-  const { error } = await sb.storage.from("jamb-images").upload(path, file);
+  const { error } = await sb.storage.from(bucket).upload(path, file);
   if(error){ console.error(error); return null; }
-  const { data } = sb.storage.from("jamb-images").getPublicUrl(path);
+  const { data } = sb.storage.from(bucket).getPublicUrl(path);
   return data.publicUrl;
 }
 
@@ -308,11 +309,12 @@ function pickQuestionsForPlan(pool, plan, seenIds){
 // If the seen count covers the entire available pool for that subject
 // (i.e. they've exhausted it), the history for that subject is cleared
 // so they start seeing fresh-feeling rotations again.
-async function getSeenQuestionIds(userId, subjectId, poolSize){
-  const { data: seenRows } = await sb.from("jamb_seen_questions").select("question_id").eq("user_id", userId).eq("subject_id", subjectId);
+async function getSeenQuestionIds(userId, subjectId, poolSize, table){
+  table = table || "jamb_seen_questions";
+  const { data: seenRows } = await sb.from(table).select("question_id").eq("user_id", userId).eq("subject_id", subjectId);
   let seen = seenRows || [];
   if(poolSize > 0 && seen.length >= poolSize){
-    await sb.from("jamb_seen_questions").delete().eq("user_id", userId).eq("subject_id", subjectId);
+    await sb.from(table).delete().eq("user_id", userId).eq("subject_id", subjectId);
     seen = [];
   }
   return new Set(seen.map(r => r.question_id));
@@ -320,10 +322,11 @@ async function getSeenQuestionIds(userId, subjectId, poolSize){
 
 // Record questions just served to a user as "seen" (upsert avoids
 // duplicate-key errors if a question is re-served after a reset).
-async function recordSeenQuestions(userId, subjectId, questions){
+async function recordSeenQuestions(userId, subjectId, questions, table){
+  table = table || "jamb_seen_questions";
   if(!questions || questions.length===0) return;
   const rows = questions.map(q => ({ user_id:userId, question_id:q.id, subject_id:subjectId }));
-  await sb.from("jamb_seen_questions").upsert(rows, { onConflict: "user_id,question_id" });
+  await sb.from(table).upsert(rows, { onConflict: "user_id,question_id" });
 }
 
 // Given answered questions (each carrying _markValue), compute raw score
@@ -627,6 +630,8 @@ function MainApp({ user, onLogout, isAdmin, setIsAdmin }){
         {view==="practice" && <PracticeFlow user={user} onExit={goHome} />}
         {view==="single_subject" && <SingleSubjectFlow user={user} onExit={goHome} />}
         {view==="weekly_challenge" && <WeeklyChallengeFlow user={user} onExit={goHome} />}
+        {view==="rsu_practice" && <RSUPracticeFlow user={user} onExit={goHome} />}
+        {view==="rsu_mock" && <RSUMockFlow user={user} onExit={goHome} />}
         {view==="flashcards" && <FlashcardsScreen user={user} onExit={goHome} />}
         {view==="notes" && <NotesScreen user={user} onExit={goHome} />}
         {view==="history" && <HistoryScreen user={user} onExit={goHome} />}
@@ -668,6 +673,25 @@ function HomeScreen({ user, onSelect }){
           <h3>Weekly Mock Challenge</h3>
           <p className="muted">Saturday 10AM–12PM. Compete with other users. Leaderboard opens at 12:01PM.</p>
           <span className="tag">Competition</span>
+        </div>
+      </div>
+
+      <div className="divider"></div>
+      <div className="eyebrow">RSU Post-UTME</div>
+      <h2>Preparing for RSU's screening?</h2>
+      <p className="muted">7 subjects: English, Mathematics, Physics, Chemistry, Biology, About RSU, and Current Affairs.</p>
+      <div className="card-grid grid-2" style={{marginTop:"1em"}}>
+        <div className="card mode-card" onClick={()=>onSelect("rsu_practice")}>
+          <div className="num">05</div>
+          <h3>RSU Practice Session</h3>
+          <p className="muted">Pick any one of the 7 subjects and however many questions you want. Full answer review after submitting.</p>
+          <span className="tag">Customizable</span>
+        </div>
+        <div className="card mode-card" onClick={()=>onSelect("rsu_mock")}>
+          <div className="num">06</div>
+          <h3>RSU Mock Session</h3>
+          <p className="muted">Fixed exam: English 10, Mathematics 10, Physics 7, Chemistry 8, Biology 8, About RSU 3, Current Affairs 4 = 50 questions. Only your score is shown after submitting.</p>
+          <span className="tag">Real exam feel</span>
         </div>
       </div>
     </div>
@@ -765,7 +789,9 @@ function MockSetup({ user, onStart, onExit }){
 
 // Reusable exam runner for multi-subject sessions (Mock, Weekly Challenge,
 // and multi-subject Practice mode all use this)
-function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
+function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish, attemptsTable, responsesTable }){
+  attemptsTable = attemptsTable || "jamb_attempts";
+  responsesTable = responsesTable || "jamb_attempt_responses";
   const { subjectData, durationSeconds } = bundle;
   const [subjIndex,setSubjIndex] = useState(0);
   const [qIndex,setQIndex] = useState(0);
@@ -804,7 +830,7 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
       return { code:sd.subject.code, name:sd.subject.name, rawScore, correct:correctCount, total, questions: questionSnapshots };
     });
 
-    const { data: attempt } = await sb.from("jamb_attempts").insert({
+    const { data: attempt } = await sb.from(attemptsTable).insert({
       user_id:user.id, mode, challenge_week: challengeWeek || null,
       total_score: totalScore, max_score: maxScore,
       submitted_at: new Date().toISOString(), duration_seconds: durationSeconds-timeLeft,
@@ -812,10 +838,10 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
     }).select().single();
     if(attempt){
       const rows = responses.map(r=>({...r, attempt_id: attempt.id}));
-      await sb.from("jamb_attempt_responses").insert(rows);
+      await sb.from(responsesTable).insert(rows);
     }
     onFinish({ perSubject, totalScore, maxScore, subjectData, answers, attemptId: attempt?.id, snapshotPerSubject });
-  },[subjectData, answers, mode, challengeWeek, user, durationSeconds, timeLeft, onFinish]);
+  },[subjectData, answers, mode, challengeWeek, user, durationSeconds, timeLeft, onFinish, attemptsTable, responsesTable]);
 
   useEffect(()=>{
     if(timeLeft<=0){ handleSubmit("time_up"); return; }
@@ -832,7 +858,7 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
     <AntiCheatWrapper onForceSubmit={()=>handleSubmit("left_screen")}>
     <div>
       <div className="flex-between no-print">
-        <h2 style={{margin:0}}>{({mock:"Mock Exam",weekly_challenge:"Weekly Challenge",practice:"Practice"})[mode] || "Exam"}</h2>
+        <h2 style={{margin:0}}>{({mock:"Mock Exam",weekly_challenge:"Weekly Challenge",practice:"Practice",rsu_practice:"RSU Practice",rsu_mock:"RSU Mock Exam"})[mode] || "Exam"}</h2>
         <span className={"timer-badge"+(timeLeft<300?" low":"")}>{fmtTime(timeLeft)}</span>
       </div>
       <div className="flex-row" style={{margin:"1em 0",flexWrap:"wrap"}}>
@@ -868,16 +894,16 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish }){
   );
 }
 
-function MultiSubjectResults({ result, user, onExit }){
+function MultiSubjectResults({ result, user, onExit, title, hideReview }){
   const { totalScore, maxScore, snapshotPerSubject } = result;
-  return <AttemptReview perSubject={snapshotPerSubject} totalScore={totalScore} maxScore={maxScore} user={user} onExit={onExit} title="Mock Result" />;
+  return <AttemptReview perSubject={snapshotPerSubject} totalScore={totalScore} maxScore={maxScore} user={user} onExit={onExit} title={title || "Mock Result"} hideReview={hideReview} />;
 }
 
 // Shared review UI: score table + full question-by-question breakdown
 // with correct/incorrect highlighting and explanations. Used both right
 // after submitting and later from History (since perSubject snapshots
 // are stored permanently in jamb_attempts.details).
-function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title }){
+function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title, hideReview }){
   const [subjFilter,setSubjFilter] = useState("all");
 
   function handlePrint(){ window.print(); }
@@ -927,6 +953,13 @@ function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title }
         <button className="btn-primary" onClick={onExit}>Back to home</button>
       </div>
 
+      {hideReview && (
+        <div className="card" style={{marginTop:"1.4em"}}>
+          <p className="muted" style={{margin:0}}>This is a mock exam — only your score is shown, the same way a real RSU Post-UTME mock would work. Question-by-question review is not available for this attempt.</p>
+        </div>
+      )}
+
+      {!hideReview && <>
       <div className="divider"></div>
       <h2>Question Review</h2>
       <p className="muted">See exactly what you answered, what was correct, and the explanation for each question.</p>
@@ -963,6 +996,7 @@ function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title }
           })}
         </div>
       ))}
+      </>}
       <button className="btn-primary no-print" onClick={onExit}>Back to home</button>
     </div>
   );
@@ -1309,6 +1343,183 @@ function WeeklyChallengeSetup({ user, windowInfo, onStart, onExit }){
   );
 }
 
+// =====================================================================
+// RSU POST-UTME PRACTICE SESSION
+// Same difficulty/marking engine as JAMB, but pulls only from rsu_*
+// tables (rsu_subjects / rsu_topics / rsu_questions), so RSU content
+// never mixes with JAMB content. One subject at a time, any question
+// count. Full review is shown after submitting.
+// =====================================================================
+function RSUPracticeFlow({ user, onExit }){
+  const [stage,setStage] = useState("setup");
+  const [bundle,setBundle] = useState(null);
+  const [result,setResult] = useState(null);
+
+  if(stage==="setup") return <RSUPracticeSetup user={user} onStart={(b)=>{setBundle(b); setStage("exam");}} onExit={onExit} />;
+  if(stage==="exam") return <MultiSubjectExam bundle={bundle} user={user} mode="rsu_practice" attemptsTable="rsu_attempts" responsesTable="rsu_attempt_responses" onFinish={(r)=>{setResult(r); setStage("results");}} />;
+  if(stage==="results") return <MultiSubjectResults result={result} user={user} onExit={onExit} title="RSU Practice Result" />;
+}
+
+function RSUPracticeSetup({ user, onStart, onExit }){
+  const [subjects,setSubjects] = useState([]);
+  const [subjectId,setSubjectId] = useState("");
+  const [topics,setTopics] = useState([]);
+  const [topicId,setTopicId] = useState("");
+  const [count,setCount] = useState(20);
+  const [minutes,setMinutes] = useState(20);
+  const [loading,setLoading] = useState(true);
+  const [err,setErr] = useState("");
+  const [preparing,setPreparing] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("rsu_subjects").select("*").order("name");
+    setSubjects(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  useEffect(()=>{
+    if(!subjectId){ setTopics([]); return; }
+    (async()=>{
+      const { data } = await sb.from("rsu_topics").select("*").eq("subject_id",subjectId).order("name");
+      setTopics(data||[]);
+    })();
+  },[subjectId]);
+
+  async function handleStart(){
+    if(!subjectId){ setErr("Please choose a subject."); return; }
+    setErr(""); setPreparing(true);
+    const subj = subjects.find(s=>s.id===subjectId);
+    let query = sb.from("rsu_questions").select("*").eq("subject_id", subjectId);
+    if(topicId) query = query.eq("topic_id", topicId);
+    const { data: pool } = await query;
+    if(!pool || pool.length===0){ setErr("No RSU questions found for this subject yet. Ask the admin to add some."); setPreparing(false); return; }
+    const plan = buildDifficultyPlan(count);
+    const seenIds = await getSeenQuestionIds(user.id, subjectId, pool.length, "rsu_seen_questions");
+    const picked = pickQuestionsForPlan(pool, plan, seenIds);
+    if(picked.length===0){ setErr("Could not build a question set — try fewer questions or remove the topic filter."); setPreparing(false); return; }
+    await recordSeenQuestions(user.id, subjectId, picked, "rsu_seen_questions");
+    setPreparing(false);
+    onStart({ subjectData: [{ subject: subj, questions: picked, plan }], durationSeconds: minutes*60 });
+  }
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>RSU Practice Session</h1>
+      <p className="muted">Pick one of the 7 RSU Post-UTME subjects and however many questions you like. Full review after submitting.</p>
+      {err && <div className="error-box">{err}</div>}
+      {subjects.length===0 && <div className="empty-state">No RSU subjects set up yet. Ask the admin to run the RSU setup SQL first.</div>}
+      {subjects.length>0 && (
+        <div className="card">
+          <div className="field">
+            <label>Subject</label>
+            <select value={subjectId} onChange={e=>{setSubjectId(e.target.value); setTopicId("");}}>
+              <option value="">Select…</option>
+              {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div className="card-grid grid-3">
+            <div className="field"><label>Questions</label><input type="number" min="5" max="60" value={count} onChange={e=>setCount(parseInt(e.target.value)||20)} /></div>
+            <div className="field">
+              <label>Topic (optional)</label>
+              <select value={topicId} onChange={e=>setTopicId(e.target.value)} disabled={!subjectId}>
+                <option value="">All topics</option>
+                {topics.map(t=> <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Time (minutes)</label><input type="number" min="5" value={minutes} onChange={e=>setMinutes(parseInt(e.target.value)||20)} /></div>
+          </div>
+          <button className="btn-primary" onClick={handleStart} disabled={preparing}>{preparing?<span className="spinner"></span>:"Start RSU practice"}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// RSU POST-UTME MOCK SESSION
+// Fixed subject/question-count distribution matching RSU's real format:
+// English 10, Mathematics 10, Physics 7, Chemistry 8, Biology 8,
+// About RSU 3, Current Affairs 4 = 50 questions. Only the score is
+// shown after submitting -- no question-by-question review.
+// =====================================================================
+const RSU_MOCK_PLAN = [
+  { code: "ENG", count: 10 },
+  { code: "MTH", count: 10 },
+  { code: "PHY", count: 7 },
+  { code: "CHM", count: 8 },
+  { code: "BIO", count: 8 },
+  { code: "ARS", count: 3 },
+  { code: "CUR", count: 4 },
+];
+
+function RSUMockFlow({ user, onExit }){
+  const [stage,setStage] = useState("setup");
+  const [bundle,setBundle] = useState(null);
+  const [result,setResult] = useState(null);
+
+  if(stage==="setup") return <RSUMockSetup user={user} onStart={(b)=>{setBundle(b); setStage("exam");}} onExit={onExit} />;
+  if(stage==="exam") return <MultiSubjectExam bundle={bundle} user={user} mode="rsu_mock" attemptsTable="rsu_attempts" responsesTable="rsu_attempt_responses" onFinish={(r)=>{setResult(r); setStage("results");}} />;
+  if(stage==="results") return <MultiSubjectResults result={result} user={user} onExit={onExit} title="RSU Mock Result" hideReview={true} />;
+}
+
+function RSUMockSetup({ user, onStart, onExit }){
+  const [subjects,setSubjects] = useState([]);
+  const [loading,setLoading] = useState(true);
+  const [err,setErr] = useState("");
+  const [preparing,setPreparing] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("rsu_subjects").select("*").order("name");
+    setSubjects(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  async function handleStart(){
+    setErr(""); setPreparing(true);
+    const subjectData = [];
+    for(const plan of RSU_MOCK_PLAN){
+      const subj = subjects.find(s=>s.code===plan.code);
+      if(!subj){ setErr(`Subject with code ${plan.code} not found — check the RSU setup SQL ran correctly.`); setPreparing(false); return; }
+      const { data: pool } = await sb.from("rsu_questions").select("*").eq("subject_id", subj.id);
+      if(!pool || pool.length===0){ setErr(`No RSU questions found for ${subj.name} yet.`); setPreparing(false); return; }
+      const diffPlan = buildDifficultyPlan(plan.count);
+      const seenIds = await getSeenQuestionIds(user.id, subj.id, pool.length, "rsu_seen_questions");
+      const picked = pickQuestionsForPlan(pool, diffPlan, seenIds);
+      if(picked.length < plan.count * 0.5){ setErr(`Not enough questions across difficulty levels for ${subj.name} — only ${picked.length} of ${plan.count} could be filled.`); setPreparing(false); return; }
+      await recordSeenQuestions(user.id, subj.id, picked, "rsu_seen_questions");
+      subjectData.push({ subject: subj, questions: picked, plan: diffPlan });
+    }
+    setPreparing(false);
+    onStart({ subjectData, durationSeconds: 60*60 });
+  }
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>RSU Mock Session</h1>
+      <p className="muted">50 questions total, 60 minutes, in the exact RSU format. Only your score is revealed at the end — no answer review, just like the real screening.</p>
+      {err && <div className="error-box">{err}</div>}
+      <div className="card">
+        <table>
+          <thead><tr><th>Subject</th><th>Questions</th></tr></thead>
+          <tbody>
+            {RSU_MOCK_PLAN.map(p=>{
+              const subj = subjects.find(s=>s.code===p.code);
+              return <tr key={p.code}><td>{subj ? subj.name : p.code}</td><td>{p.count}</td></tr>;
+            })}
+          </tbody>
+        </table>
+        <button className="btn-primary" style={{marginTop:"1em"}} onClick={handleStart} disabled={preparing}>{preparing?<span className="spinner"></span>:"Start RSU mock exam"}</button>
+      </div>
+    </div>
+  );
+}
+
 function LeaderboardScreen({ onExit }){
   const [entries,setEntries] = useState([]);
   const [loading,setLoading] = useState(true);
@@ -1363,6 +1574,17 @@ function LeaderboardScreen({ onExit }){
 // =====================================================================
 // HISTORY
 // =====================================================================
+const HISTORY_MODE_LABELS = {
+  mock:"JAMB Mock", practice:"JAMB Practice", single_subject:"JAMB Single Subject",
+  weekly_challenge:"Weekly Challenge", rsu_practice:"RSU Practice", rsu_mock:"RSU Mock"
+};
+
+// Performance History: merges JAMB attempts (jamb_attempts) and RSU
+// attempts (rsu_attempts) for this user into one list, ranks every
+// attempt against this user's own other attempts by percentage score
+// (best = rank #1), and shows a per-subject score breakdown inline.
+// RSU mock attempts never expose the "View full review" button, since
+// RSU mock sessions are meant to only reveal the final score.
 function HistoryScreen({ user, onExit }){
   const [attempts,setAttempts] = useState([]);
   const [loading,setLoading] = useState(true);
@@ -1371,14 +1593,26 @@ function HistoryScreen({ user, onExit }){
 
   async function load(){
     setLoading(true);
-    const { data } = await sb.from("jamb_attempts").select("*").eq("user_id",user.id).order("submitted_at",{ascending:false});
-    setAttempts(data||[]);
+    const [{ data: jamb }, { data: rsu }] = await Promise.all([
+      sb.from("jamb_attempts").select("*").eq("user_id",user.id).order("submitted_at",{ascending:false}),
+      sb.from("rsu_attempts").select("*").eq("user_id",user.id).order("submitted_at",{ascending:false}),
+    ]);
+    const combined = [
+      ...(jamb||[]).map(a=>({...a, _source:"jamb_attempts"})),
+      ...(rsu||[]).map(a=>({...a, _source:"rsu_attempts"})),
+    ];
+    combined.sort((a,b)=> new Date(b.submitted_at) - new Date(a.submitted_at));
+    // Rank this user's own attempts against each other by percentage score.
+    const withPct = combined.map(a=>({...a, _pct: a.max_score ? (a.total_score/a.max_score)*100 : 0 }));
+    const byRank = [...withPct].sort((a,b)=> b._pct - a._pct);
+    const rankOf = new Map(byRank.map((a,i)=>[a.id, i+1]));
+    setAttempts(withPct.map(a=>({...a, _rank: rankOf.get(a.id)})));
     setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
 
-  async function handleDelete(id){
-    await sb.from("jamb_attempts").delete().eq("id", id);
+  async function handleDelete(id, source){
+    await sb.from(source).delete().eq("id", id);
     setConfirmDeleteId(null);
     load();
   }
@@ -1387,46 +1621,57 @@ function HistoryScreen({ user, onExit }){
 
   if(viewing){
     const d = viewing.details || {};
+    const isRsuMock = viewing.mode === "rsu_mock";
     return <AttemptReview
       perSubject={d.perSubject || []}
       totalScore={viewing.total_score}
       maxScore={viewing.max_score}
       user={user}
       onExit={()=>setViewing(null)}
-      title={`${({mock:"Mock Exam",practice:"Practice",single_subject:"Single Subject Practice",weekly_challenge:"Weekly Challenge"})[viewing.mode]||viewing.mode} — ${new Date(viewing.submitted_at).toLocaleDateString()}`}
+      hideReview={isRsuMock}
+      title={`${HISTORY_MODE_LABELS[viewing.mode]||viewing.mode} — ${new Date(viewing.submitted_at).toLocaleDateString()}`}
     />;
   }
 
   return (
     <div>
       <button className="btn-ghost" onClick={onExit}>← Back</button>
-      <h1>Practice History</h1>
-      <p className="muted">View any past attempt exactly as you submitted it, including every question, your answers, and explanations.</p>
+      <h1>Performance History</h1>
+      <p className="muted">Every JAMB and RSU attempt you've taken, ranked against each other by score percentage, with a subject-by-subject breakdown.</p>
       {attempts.length===0 && <div className="empty-state">No attempts yet.</div>}
       {attempts.length>0 && (
-        <div className="card">
+        <div className="card" style={{overflowX:"auto"}}>
           <table>
-            <thead><tr><th>Date</th><th>Mode</th><th>Score</th><th>Subjects</th><th></th></tr></thead>
+            <thead><tr><th>Rank</th><th>Date</th><th>Mode</th><th>Score</th><th>%</th><th>Breakdown</th><th></th></tr></thead>
             <tbody>
-              {attempts.map(a=>(
-                <tr key={a.id}>
-                  <td>{a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : "—"}</td>
-                  <td>{({mock:"Mock",practice:"Practice",single_subject:"Single Subject",weekly_challenge:"Weekly Challenge"})[a.mode]||a.mode}</td>
-                  <td>{a.total_score ?? "—"} / {a.max_score ?? "—"}</td>
-                  <td>{(a.details?.perSubject||[]).map(s=>s.code).join(", ")}</td>
-                  <td>
-                    <div className="flex-row" style={{gap:".4em"}}>
-                      <button className="btn-ghost" onClick={()=>setViewing(a)} disabled={!a.details?.perSubject}>View</button>
-                      {confirmDeleteId===a.id
-                        ? <>
-                            <button className="btn-warn" onClick={()=>handleDelete(a.id)}>Confirm delete</button>
-                            <button className="btn-ghost" onClick={()=>setConfirmDeleteId(null)}>Cancel</button>
-                          </>
-                        : <button className="btn-ghost" style={{color:"var(--warn)"}} onClick={()=>setConfirmDeleteId(a.id)}>Delete</button>}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {attempts.map(a=>{
+                const isRsuMock = a.mode === "rsu_mock";
+                const breakdown = a.details?.perSubject || [];
+                return (
+                  <tr key={a.id}>
+                    <td><span className="tag">#{a._rank}</span></td>
+                    <td>{a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : "—"}</td>
+                    <td>{HISTORY_MODE_LABELS[a.mode]||a.mode}</td>
+                    <td>{a.total_score ?? "—"} / {a.max_score ?? "—"}</td>
+                    <td>{a._pct.toFixed(1)}%</td>
+                    <td style={{fontSize:".82rem"}}>
+                      {breakdown.map(s=> <div key={s.code}>{s.name}: {s.rawScore}/100 ({s.correct}/{s.total})</div>)}
+                    </td>
+                    <td>
+                      <div className="flex-row" style={{gap:".4em"}}>
+                        {!isRsuMock && <button className="btn-ghost" onClick={()=>setViewing(a)} disabled={!a.details?.perSubject}>View</button>}
+                        {isRsuMock && <span className="muted" style={{fontSize:".78rem"}}>Score only</span>}
+                        {confirmDeleteId===a.id
+                          ? <>
+                              <button className="btn-warn" onClick={()=>handleDelete(a.id, a._source)}>Confirm delete</button>
+                              <button className="btn-ghost" onClick={()=>setConfirmDeleteId(null)}>Cancel</button>
+                            </>
+                          : <button className="btn-ghost" style={{color:"var(--warn)"}} onClick={()=>setConfirmDeleteId(a.id)}>Delete</button>}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1469,26 +1714,52 @@ function AdminGate({ isAdmin, setIsAdmin, onExit }){
 }
 
 function AdminDashboard({ onExit }){
+  const [app,setApp] = useState("jamb"); // jamb | rsu
   const [tab,setTab] = useState("add_single");
+  const [rsuTab,setRsuTab] = useState("add_single");
 
   return (
     <div>
       <div className="flex-between no-print">
-        <h1>Admin Panel — JAMB App</h1>
+        <h1>Admin Panel</h1>
         <button className="btn-ghost" onClick={onExit}>← Exit admin</button>
       </div>
-      <div className="flex-row" style={{marginBottom:"1.2em",flexWrap:"wrap"}}>
-        <button className={tab==="add_single"?"btn-primary":"btn-secondary"} onClick={()=>setTab("add_single")}>Add Single Question</button>
-        <button className={tab==="bulk"?"btn-primary":"btn-secondary"} onClick={()=>setTab("bulk")}>Bulk Parser</button>
-        <button className={tab==="manage"?"btn-primary":"btn-secondary"} onClick={()=>setTab("manage")}>Manage Questions</button>
-        <button className={tab==="users"?"btn-primary":"btn-secondary"} onClick={()=>setTab("users")}>Users</button>
-        <button className={tab==="attempts"?"btn-primary":"btn-secondary"} onClick={()=>setTab("attempts")}>All Attempts</button>
+      <div className="flex-row" style={{marginBottom:"1em"}}>
+        <button className={app==="jamb"?"btn-primary":"btn-secondary"} onClick={()=>setApp("jamb")}>JAMB App</button>
+        <button className={app==="rsu"?"btn-primary":"btn-secondary"} onClick={()=>setApp("rsu")}>RSU Post-UTME App</button>
       </div>
-      {tab==="add_single" && <AdminAddSingle />}
-      {tab==="bulk" && <AdminBulkParser />}
-      {tab==="manage" && <AdminManageQuestions />}
-      {tab==="users" && <AdminUsers />}
-      {tab==="attempts" && <AdminAttempts />}
+
+      {app==="jamb" && <>
+        <div className="flex-row" style={{marginBottom:"1.2em",flexWrap:"wrap"}}>
+          <button className={tab==="add_single"?"btn-primary":"btn-secondary"} onClick={()=>setTab("add_single")}>Add Single Question</button>
+          <button className={tab==="bulk"?"btn-primary":"btn-secondary"} onClick={()=>setTab("bulk")}>Bulk Parser</button>
+          <button className={tab==="manage"?"btn-primary":"btn-secondary"} onClick={()=>setTab("manage")}>Manage Questions</button>
+          <button className={tab==="users"?"btn-primary":"btn-secondary"} onClick={()=>setTab("users")}>Users</button>
+          <button className={tab==="attempts"?"btn-primary":"btn-secondary"} onClick={()=>setTab("attempts")}>All Attempts</button>
+        </div>
+        {tab==="add_single" && <AdminAddSingle />}
+        {tab==="bulk" && <AdminBulkParser />}
+        {tab==="manage" && <AdminManageQuestions />}
+        {tab==="users" && <AdminUsers />}
+        {tab==="attempts" && <AdminAttempts />}
+      </>}
+
+      {app==="rsu" && <>
+        <div className="flex-row" style={{marginBottom:"1.2em",flexWrap:"wrap"}}>
+          <button className={rsuTab==="add_single"?"btn-primary":"btn-secondary"} onClick={()=>setRsuTab("add_single")}>Add Single Question</button>
+          <button className={rsuTab==="bulk"?"btn-primary":"btn-secondary"} onClick={()=>setRsuTab("bulk")}>Bulk Parser</button>
+          <button className={rsuTab==="manage"?"btn-primary":"btn-secondary"} onClick={()=>setRsuTab("manage")}>Manage Questions</button>
+          <button className={rsuTab==="flashcards"?"btn-primary":"btn-secondary"} onClick={()=>setRsuTab("flashcards")}>Flashcards</button>
+          <button className={rsuTab==="users"?"btn-primary":"btn-secondary"} onClick={()=>setRsuTab("users")}>Users</button>
+          <button className={rsuTab==="attempts"?"btn-primary":"btn-secondary"} onClick={()=>setRsuTab("attempts")}>All Attempts</button>
+        </div>
+        {rsuTab==="add_single" && <RSUAdminAddSingle />}
+        {rsuTab==="bulk" && <RSUAdminBulkParser />}
+        {rsuTab==="manage" && <RSUAdminManageQuestions />}
+        {rsuTab==="flashcards" && <RSUAdminFlashcards />}
+        {rsuTab==="users" && <AdminUsers />}
+        {rsuTab==="attempts" && <RSUAdminAttempts />}
+      </>}
     </div>
   );
 }
@@ -1890,6 +2161,434 @@ function AdminAttempts(){
 }
 
 // =====================================================================
+// RSU ADMIN — subjects/topics hook, single-question form (with image
+// upload for pictures/diagrams), bulk parser, manage questions,
+// flashcard facts, and all-attempts view. Everything here writes only
+// to rsu_* tables, so it can never touch JAMB content.
+// =====================================================================
+function useRsuSubjectsAndTopics(){
+  const [subjects,setSubjects] = useState([]);
+  const [topicsBySubject,setTopicsBySubject] = useState({});
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("rsu_subjects").select("*").order("name");
+    setSubjects(data||[]);
+  })(); },[]);
+  async function loadTopics(subjectId){
+    const { data } = await sb.from("rsu_topics").select("*").eq("subject_id",subjectId).order("name");
+    setTopicsBySubject(prev=>({...prev,[subjectId]:data||[]}));
+    return data||[];
+  }
+  async function getOrCreateTopic(subjectId, name){
+    if(!name || !name.trim()) return null;
+    const trimmed = name.trim();
+    const existing = (topicsBySubject[subjectId]||[]).find(t=>t.name.toLowerCase()===trimmed.toLowerCase());
+    if(existing) return existing.id;
+    const { data, error } = await sb.from("rsu_topics").insert({ subject_id:subjectId, name:trimmed }).select().single();
+    if(error){ console.error(error); return null; }
+    setTopicsBySubject(prev=>({...prev,[subjectId]:[...(prev[subjectId]||[]),data]}));
+    return data.id;
+  }
+  return { subjects, topicsBySubject, loadTopics, getOrCreateTopic };
+}
+
+// ---------------------------------------------------------------------
+// RSU ADMIN: Add single question — this is also the "special single
+// question parser" for RSU: it supports a picture/diagram upload, just
+// like the JAMB one, but saves into rsu_questions so it only ever shows
+// up in RSU Practice / RSU Mock.
+// ---------------------------------------------------------------------
+function RSUAdminAddSingle(){
+  const { subjects, topicsBySubject, loadTopics, getOrCreateTopic } = useRsuSubjectsAndTopics();
+  const [subjectId,setSubjectId] = useState("");
+  const [topicName,setTopicName] = useState("");
+  const [difficulty,setDifficulty] = useState("moderate");
+  const [questionText,setQuestionText] = useState("");
+  const [options,setOptions] = useState({A:"",B:"",C:"",D:"",E:""});
+  const [correct,setCorrect] = useState("A");
+  const [explanation,setExplanation] = useState("");
+  const [file,setFile] = useState(null);
+  const [msg,setMsg] = useState("");
+  const [loading,setLoading] = useState(false);
+
+  useEffect(()=>{ if(subjectId) loadTopics(subjectId); },[subjectId]);
+
+  async function handleSubmit(){
+    setMsg("");
+    if(!subjectId || !questionText.trim() || !options.A.trim() || !options.B.trim() || !options.C.trim() || !options.D.trim()){
+      setMsg("Please fill subject, question text, and at least options A–D.");
+      return;
+    }
+    setLoading(true);
+    let image_url = null;
+    if(file) image_url = await uploadImage(file, "rsu-images");
+    const topic_id = await getOrCreateTopic(subjectId, topicName);
+    const { error } = await sb.from("rsu_questions").insert({
+      subject_id: subjectId, topic_id, difficulty,
+      question_text: questionText.trim(), image_url,
+      option_a: options.A, option_b: options.B, option_c: options.C, option_d: options.D,
+      option_e: options.E.trim() || null, correct_option: correct, explanation: explanation.trim() || null
+    });
+    setLoading(false);
+    if(error){ setMsg("Could not save question."); console.error(error); return; }
+    setMsg("Question added.");
+    setQuestionText(""); setOptions({A:"",B:"",C:"",D:"",E:""}); setExplanation(""); setFile(null);
+  }
+
+  return (
+    <div className="card">
+      <h3>Add an RSU question (supports pictures/diagrams)</h3>
+      {msg && <div className={msg.includes("added")?"success-box":"error-box"}>{msg}</div>}
+      <div className="card-grid grid-2">
+        <div className="field">
+          <label>Subject</label>
+          <select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
+            <option value="">Select…</option>
+            {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label>Topic (optional — type new or existing)</label>
+          <input value={topicName} onChange={e=>setTopicName(e.target.value)} list="rsu-topic-suggestions" />
+          <datalist id="rsu-topic-suggestions">
+            {(topicsBySubject[subjectId]||[]).map(t=> <option key={t.id} value={t.name} />)}
+          </datalist>
+        </div>
+      </div>
+      <div className="field">
+        <label>Difficulty</label>
+        <select value={difficulty} onChange={e=>setDifficulty(e.target.value)}>
+          <option value="easy">Easy</option>
+          <option value="moderate">Moderate</option>
+          <option value="difficult">Difficult</option>
+        </select>
+      </div>
+      <div className="field"><label>Question</label><textarea rows="3" value={questionText} onChange={e=>setQuestionText(e.target.value)}></textarea></div>
+      <div className="field"><label>Picture / diagram (optional)</label><input type="file" accept="image/*" onChange={e=>setFile(e.target.files[0])} /></div>
+      <div className="card-grid grid-2">
+        {["A","B","C","D","E"].map(label=>(
+          <div className="field" key={label}>
+            <label>Option {label} {label==="E" && "(optional)"}</label>
+            <input value={options[label]} onChange={e=>setOptions(o=>({...o,[label]:e.target.value}))} />
+          </div>
+        ))}
+        <div className="field">
+          <label>Correct option</label>
+          <select value={correct} onChange={e=>setCorrect(e.target.value)}>
+            {["A","B","C","D","E"].map(l=> <option key={l} value={l}>{l}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field"><label>Explanation (optional)</label><textarea rows="2" value={explanation} onChange={e=>setExplanation(e.target.value)}></textarea></div>
+      <button className="btn-primary" onClick={handleSubmit} disabled={loading}>{loading?<span className="spinner"></span>:"Save RSU question"}</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// RSU ADMIN: Bulk Parser — same text format as the JAMB one, but only
+// matches against the 7 RSU subjects and always saves into rsu_*
+// tables, so bulk-pasted questions here never leak into JAMB sessions.
+// ---------------------------------------------------------------------
+function parseBulkRSU(raw){
+  const blocks = raw.split(/\n\s*\n+/).map(b=>b.trim()).filter(Boolean);
+  const parsed = [];
+  const problems = [];
+  blocks.forEach((block, bi)=>{
+    const lines = block.split("\n").map(l=>l.trim()).filter(Boolean);
+    const get = (prefix) => {
+      const line = lines.find(l=> l.toLowerCase().startsWith(prefix.toLowerCase()));
+      return line ? line.slice(line.indexOf(":")+1).trim() : "";
+    };
+    const subject = get("Subject:");
+    const topic = get("Topic:");
+    let difficulty = get("Difficulty:").toLowerCase();
+    if(!["easy","moderate","difficult"].includes(difficulty)) difficulty = "moderate";
+    const question = get("Question:");
+    const answer = get("Answer:").toUpperCase().replace(/[^A-E]/g,"");
+    const explanation = get("Explanation:");
+    const opts = {};
+    ["A","B","C","D","E"].forEach(label=>{
+      const line = lines.find(l=> new RegExp(`^Option\\s*${label}\\b`, "i").test(l));
+      if(line) opts[label] = line.replace(new RegExp(`^Option\\s*${label}[:\\.\\)]?\\s*`,"i"),"").trim();
+    });
+    if(!subject || !question || !opts.A || !opts.B || !opts.C || !opts.D || !answer){
+      problems.push(`Block ${bi+1}: missing required field(s) (need Subject, Question, Option A-D, Answer).`);
+      return;
+    }
+    parsed.push({ subject, topic, difficulty, question, opts, answer, explanation });
+  });
+  return { parsed, problems };
+}
+
+function RSUAdminBulkParser(){
+  const [raw,setRaw] = useState("");
+  const [preview,setPreview] = useState(null);
+  const [problems,setProblems] = useState([]);
+  const [saving,setSaving] = useState(false);
+  const [msg,setMsg] = useState("");
+
+  function handlePreview(){
+    const { parsed, problems } = parseBulkRSU(raw);
+    setPreview(parsed); setProblems(problems); setMsg("");
+  }
+
+  async function handleSaveAll(){
+    if(!preview || preview.length===0) return;
+    setSaving(true); setMsg("");
+    const { data: subjects } = await sb.from("rsu_subjects").select("*");
+    const { data: allTopics } = await sb.from("rsu_topics").select("*");
+    let topicsCache = allTopics || [];
+    let saved=0, failed=0;
+    for(const item of preview){
+      const subj = (subjects||[]).find(s=> s.code.toLowerCase()===item.subject.toLowerCase().replace(/\s+/g,"") || s.name.toLowerCase()===item.subject.toLowerCase());
+      if(!subj){ failed++; continue; }
+      let topic_id = null;
+      if(item.topic){
+        let t = topicsCache.find(t=>t.subject_id===subj.id && t.name.toLowerCase()===item.topic.toLowerCase());
+        if(!t){
+          const { data: newTopic } = await sb.from("rsu_topics").insert({ subject_id:subj.id, name:item.topic }).select().single();
+          if(newTopic){ t = newTopic; topicsCache.push(newTopic); }
+        }
+        topic_id = t ? t.id : null;
+      }
+      const { error } = await sb.from("rsu_questions").insert({
+        subject_id: subj.id, topic_id, difficulty: item.difficulty,
+        question_text: item.question,
+        option_a: item.opts.A, option_b: item.opts.B, option_c: item.opts.C, option_d: item.opts.D,
+        option_e: item.opts.E || null, correct_option: item.answer, explanation: item.explanation || null
+      });
+      if(error){ failed++; console.error(error); } else saved++;
+    }
+    setSaving(false);
+    setMsg(`Saved ${saved} question(s).${failed>0?` ${failed} failed (check subject names match exactly: English, Mathematics, Physics, Chemistry, Biology, About RSU, Current Affairs).`:""}`);
+    if(failed===0){ setRaw(""); setPreview(null); }
+  }
+
+  return (
+    <div className="card">
+      <h3>RSU Bulk Parser</h3>
+      <p className="muted">Paste multiple RSU questions, separated by a blank line. These are saved to the RSU question bank only, and will only ever appear in RSU Practice / RSU Mock sessions. Subject must be one of: English, Mathematics, Physics, Chemistry, Biology, About RSU, Current Affairs.</p>
+      <pre style={{background:"#f5f2e8",padding:"1em",borderRadius:"8px",fontSize:".82rem",overflowX:"auto"}}>
+{`Subject: Physics
+Topic: Motion
+Difficulty: moderate
+Question: What is the SI unit of force?
+Option A: Joule
+Option B: Newton
+Option C: Watt
+Option D: Pascal
+Answer: B
+Explanation: Force is measured in Newtons.`}
+      </pre>
+      <div className="field"><label>Paste your questions</label><textarea rows="10" value={raw} onChange={e=>setRaw(e.target.value)}></textarea></div>
+      <div className="flex-row">
+        <button className="btn-secondary" onClick={handlePreview}>Preview</button>
+        {preview && preview.length>0 && <button className="btn-primary" onClick={handleSaveAll} disabled={saving}>{saving?<span className="spinner"></span>:`Save all ${preview.length} question(s)`}</button>}
+      </div>
+      {msg && <div className="success-box" style={{marginTop:"1em"}}>{msg}</div>}
+      {problems.length>0 && <div className="error-box" style={{marginTop:"1em"}}>{problems.map((p,i)=><div key={i}>{p}</div>)}</div>}
+      {preview && (
+        <div style={{marginTop:"1em"}}>
+          <p className="muted">{preview.length} question(s) ready to save:</p>
+          {preview.map((p,i)=>(
+            <div key={i} className="card" style={{padding:"1em"}}>
+              <div className="flex-between">
+                <p style={{fontWeight:600,margin:0}}>{p.subject} {p.topic && `· ${p.topic}`}</p>
+                <span className={"diff-badge diff-"+p.difficulty}>{p.difficulty}</span>
+              </div>
+              <p>{p.question}</p>
+              <p className="muted" style={{fontSize:".85rem"}}>Answer: {p.answer}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// RSU ADMIN: Manage / delete questions
+// ---------------------------------------------------------------------
+function RSUAdminManageQuestions(){
+  const [subjects,setSubjects] = useState([]);
+  const [subjectId,setSubjectId] = useState("");
+  const [questions,setQuestions] = useState([]);
+  const [loading,setLoading] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("rsu_subjects").select("*").order("name");
+    setSubjects(data||[]);
+  })(); },[]);
+
+  useEffect(()=>{
+    if(!subjectId){ setQuestions([]); return; }
+    loadQuestions(subjectId);
+  },[subjectId]);
+
+  async function loadQuestions(subjId){
+    setLoading(true);
+    const { data } = await sb.from("rsu_questions").select("*").eq("subject_id", subjId).order("created_at",{ascending:false});
+    setQuestions(data||[]);
+    setLoading(false);
+  }
+
+  async function handleDelete(id){
+    await sb.from("rsu_questions").delete().eq("id", id);
+    loadQuestions(subjectId);
+  }
+
+  return (
+    <div className="card">
+      <h3>Manage RSU questions</h3>
+      <div className="field">
+        <label>Subject</label>
+        <select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
+          <option value="">Select…</option>
+          {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </div>
+      {loading && <div className="empty-state"><span className="spinner"></span></div>}
+      {!loading && subjectId && questions.length===0 && <div className="empty-state">No questions yet for this subject.</div>}
+      {!loading && subjectId && questions.length>0 && <p className="muted">{questions.length} question(s) total.</p>}
+      {questions.map(q=>(
+        <div key={q.id} className="card" style={{padding:"1em"}}>
+          <div className="flex-between">
+            <p style={{fontWeight:600,flex:1}}>{q.question_text}</p>
+            <button className="btn-warn" onClick={()=>handleDelete(q.id)}>Delete</button>
+          </div>
+          {q.image_url && <img className="q-image" src={q.image_url} style={{maxWidth:"200px"}} alt="" />}
+          <div className="flex-row">
+            <span className={"diff-badge diff-"+q.difficulty}>{q.difficulty}</span>
+            <span className="muted" style={{fontSize:".85rem"}}>Correct: {q.correct_option}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// RSU ADMIN: Flashcard facts — plain fact cards per subject (not tied
+// to a question), e.g. "Fact: RSU was founded in 2005." Learners flip
+// through these in the Flashcards screen under the RSU tab.
+// ---------------------------------------------------------------------
+function RSUAdminFlashcards(){
+  const [subjects,setSubjects] = useState([]);
+  const [subjectId,setSubjectId] = useState("");
+  const [topic,setTopic] = useState("");
+  const [front,setFront] = useState("");
+  const [back,setBack] = useState("");
+  const [cards,setCards] = useState([]);
+  const [msg,setMsg] = useState("");
+  const [loading,setLoading] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("rsu_subjects").select("*").order("name");
+    setSubjects(data||[]);
+  })(); },[]);
+
+  async function loadCards(subjId){
+    const { data } = await sb.from("rsu_flashcards").select("*").eq("subject_id", subjId).order("created_at",{ascending:false});
+    setCards(data||[]);
+  }
+  useEffect(()=>{ if(subjectId) loadCards(subjectId); else setCards([]); },[subjectId]);
+
+  async function handleAdd(){
+    setMsg("");
+    if(!subjectId || !front.trim() || !back.trim()){ setMsg("Please choose a subject and fill both sides of the card."); return; }
+    setLoading(true);
+    const { error } = await sb.from("rsu_flashcards").insert({
+      subject_id: subjectId, topic: topic.trim() || null, front_text: front.trim(), back_text: back.trim()
+    });
+    setLoading(false);
+    if(error){ setMsg("Could not save flashcard."); console.error(error); return; }
+    setFront(""); setBack(""); setTopic(""); setMsg("Flashcard added.");
+    loadCards(subjectId);
+  }
+
+  async function handleDelete(id){
+    await sb.from("rsu_flashcards").delete().eq("id", id);
+    loadCards(subjectId);
+  }
+
+  return (
+    <div className="card">
+      <h3>RSU Flashcards — add facts per subject</h3>
+      <p className="muted">Add short facts, definitions, or key points for each RSU subject. Learners see the front first, then flip to reveal the back.</p>
+      {msg && <div className={msg.includes("added")?"success-box":"error-box"}>{msg}</div>}
+      <div className="card-grid grid-2">
+        <div className="field">
+          <label>Subject</label>
+          <select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
+            <option value="">Select…</option>
+            {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div className="field"><label>Topic label (optional)</label><input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="e.g. RSU History" /></div>
+      </div>
+      <div className="field"><label>Front (question / prompt / fact title)</label><textarea rows="2" value={front} onChange={e=>setFront(e.target.value)}></textarea></div>
+      <div className="field"><label>Back (answer / the fact itself)</label><textarea rows="2" value={back} onChange={e=>setBack(e.target.value)}></textarea></div>
+      <button className="btn-primary" onClick={handleAdd} disabled={loading}>{loading?<span className="spinner"></span>:"Add flashcard"}</button>
+
+      {subjectId && (
+        <>
+          <div className="divider"></div>
+          <p className="muted">{cards.length} flashcard(s) for this subject.</p>
+          {cards.map(c=>(
+            <div key={c.id} className="card" style={{padding:"1em"}}>
+              <div className="flex-between">
+                <p style={{fontWeight:600,margin:0}}>{c.front_text}</p>
+                <button className="btn-ghost" style={{color:"var(--warn)"}} onClick={()=>handleDelete(c.id)}>Delete</button>
+              </div>
+              <p className="muted" style={{marginTop:".4em"}}>{c.back_text}</p>
+              {c.topic && <span className="tag">{c.topic}</span>}
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// RSU ADMIN: All attempts across all users
+// ---------------------------------------------------------------------
+function RSUAdminAttempts(){
+  const [attempts,setAttempts] = useState([]);
+  const [loading,setLoading] = useState(true);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("rsu_attempts").select("*, jamb_users(full_name,email)").order("submitted_at",{ascending:false}).limit(300);
+    setAttempts(data||[]);
+    setLoading(false);
+  })(); },[]);
+
+  if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
+
+  return (
+    <div className="card">
+      <h3>All RSU attempts</h3>
+      {attempts.length===0 && <div className="empty-state">No attempts recorded yet.</div>}
+      {attempts.length>0 && (
+        <table>
+          <thead><tr><th>User</th><th>Mode</th><th>Score</th><th>Date</th></tr></thead>
+          <tbody>
+            {attempts.map(a=>(
+              <tr key={a.id}>
+                <td>{a.jamb_users?.full_name || "—"}</td>
+                <td>{({rsu_practice:"RSU Practice",rsu_mock:"RSU Mock"})[a.mode]||a.mode}</td>
+                <td>{a.total_score ?? "—"} / {a.max_score ?? "—"}</td>
+                <td>{a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
 // ANTI-CHEAT WRAPPER
 // Wraps any exam screen. If the user switches tabs/apps or minimizes
 // the browser (visibilitychange -> hidden), a 3-second countdown shows
@@ -1947,7 +2646,26 @@ function AntiCheatWrapper({ children, onForceSubmit }){
 // =====================================================================
 // FLASHCARDS
 // =====================================================================
+// FlashcardsScreen now toggles between the original JAMB flashcards
+// (built from jamb_questions, grouped by topic) and the new RSU
+// flashcards (fact cards added by the admin per RSU subject).
 function FlashcardsScreen({ user, onExit }){
+  const [app,setApp] = useState("jamb");
+  return (
+    <div>
+      <button className="btn-ghost" onClick={onExit}>← Back</button>
+      <h1>Flashcards</h1>
+      <div className="flex-row" style={{marginBottom:"1em"}}>
+        <button className={app==="jamb"?"btn-primary":"btn-secondary"} onClick={()=>setApp("jamb")}>JAMB</button>
+        <button className={app==="rsu"?"btn-primary":"btn-secondary"} onClick={()=>setApp("rsu")}>RSU</button>
+      </div>
+      {app==="jamb" && <JambFlashcardsPanel user={user} />}
+      {app==="rsu" && <RSUFlashcardsPanel user={user} />}
+    </div>
+  );
+}
+
+function JambFlashcardsPanel({ user }){
   const [subjects,setSubjects] = useState([]);
   const [subjectId,setSubjectId] = useState("");
   const [topics,setTopics] = useState([]);
@@ -1991,8 +2709,6 @@ function FlashcardsScreen({ user, onExit }){
 
   return (
     <div>
-      <button className="btn-ghost" onClick={onExit}>← Back</button>
-      <h1>Flashcards</h1>
       <div className="card">
         <div className="card-grid grid-2">
           <div className="field">
@@ -2030,6 +2746,72 @@ function FlashcardsScreen({ user, onExit }){
         </div>
       )}
       {cards.length===0 && topicId && <div className="empty-state">No questions found for this topic yet.</div>}
+    </div>
+  );
+}
+
+// RSU flashcards: fact cards (front/back) added by the admin per
+// subject via rsu_flashcards, not tied to exam questions.
+function RSUFlashcardsPanel({ user }){
+  const [subjects,setSubjects] = useState([]);
+  const [subjectId,setSubjectId] = useState("");
+  const [cards,setCards] = useState([]);
+  const [idx,setIdx] = useState(0);
+  const [flipped,setFlipped] = useState(false);
+  const [points,setPoints] = useState(0);
+
+  useEffect(()=>{ (async()=>{
+    const { data } = await sb.from("rsu_subjects").select("*").order("name");
+    setSubjects(data||[]);
+  })(); },[]);
+
+  async function loadCards(){
+    if(!subjectId) return;
+    const { data } = await sb.from("rsu_flashcards").select("*").eq("subject_id", subjectId);
+    setCards((data||[]).sort(()=>Math.random()-0.5));
+    setIdx(0); setFlipped(false);
+    const { data: fp } = await sb.from("rsu_flashcard_progress").select("*").eq("user_id",user.id).eq("subject_id",subjectId).maybeSingle();
+    setPoints(fp?.points || 0);
+  }
+
+  async function markKnew(){
+    const newPoints = points + 5;
+    setPoints(newPoints);
+    await sb.from("rsu_flashcard_progress").upsert({ user_id:user.id, subject_id:subjectId, points:newPoints, updated_at:new Date().toISOString() }, { onConflict:"user_id,subject_id" });
+    next();
+  }
+  function next(){ setFlipped(false); setIdx(i=> (i+1) % Math.max(cards.length,1)); }
+
+  const card = cards[idx];
+
+  return (
+    <div>
+      <div className="card">
+        <div className="field">
+          <label>Subject</label>
+          <select value={subjectId} onChange={e=>{setSubjectId(e.target.value); setCards([]);}}>
+            <option value="">Select…</option>
+            {subjects.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <button className="btn-primary" onClick={loadCards} disabled={!subjectId}>Load flashcards</button>
+      </div>
+
+      {cards.length>0 && card && (
+        <div className="card" style={{textAlign:"center"}}>
+          <span className="tag">★ {points} points</span>
+          <p className="muted" style={{marginTop:"1em"}}>Card {idx+1} of {cards.length}{card.topic ? ` · ${card.topic}` : ""}</p>
+          <div style={{minHeight:"120px",display:"flex",alignItems:"center",justifyContent:"center",padding:"1em"}}>
+            <p style={{fontSize:"1.15rem",fontWeight:600}}>{flipped ? card.back_text : card.front_text}</p>
+          </div>
+          <div className="flex-row" style={{justifyContent:"center"}}>
+            <button className="btn-secondary" onClick={()=>setFlipped(f=>!f)}>{flipped ? "Show front" : "Show answer"}</button>
+            <button className="btn-secondary" onClick={next}>Skip</button>
+            <button className="btn-primary" onClick={markKnew}>I knew this (+5)</button>
+          </div>
+        </div>
+      )}
+      {cards.length===0 && subjectId && <div className="empty-state">No flashcards added for this subject yet. Ask the admin to add some.</div>}
     </div>
   );
 }
