@@ -331,6 +331,19 @@ async function recordSeenQuestions(userId, subjectId, questions, table){
 
 // Given answered questions (each carrying _markValue), compute raw score
 // out of 100, rounded to nearest whole number.
+// Pick questions completely at random (no difficulty quota), each worth
+// a flat 1 raw mark. Used by RSU Practice/Mock, which — unlike JAMB —
+// does not use the difficult/moderate/easy weighted marking scheme.
+// Unseen questions are still preferred over seen ones for rotation.
+function pickQuestionsRandom(pool, count, seenIds){
+  seenIds = seenIds || new Set();
+  let unseen = pool.filter(q => !seenIds.has(q.id)).sort(()=>Math.random()-0.5);
+  let seen = pool.filter(q => seenIds.has(q.id)).sort(()=>Math.random()-0.5);
+  let chosen = unseen.slice(0, count);
+  if(chosen.length < count) chosen = chosen.concat(seen.slice(0, count - chosen.length));
+  return chosen.map(q => ({ ...q, _markValue: 1 })).sort(()=>Math.random()-0.5);
+}
+
 function scoreSubjectAttempt(questions, answers){
   let earned = 0;
   let correctCount = 0;
@@ -792,7 +805,8 @@ function MockSetup({ user, onStart, onExit }){
 function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish, attemptsTable, responsesTable }){
   attemptsTable = attemptsTable || "jamb_attempts";
   responsesTable = responsesTable || "jamb_attempt_responses";
-  const { subjectData, durationSeconds } = bundle;
+  const { subjectData, durationSeconds, jambScore } = bundle;
+  const rawScoring = mode === "rsu_practice" || mode === "rsu_mock";
   const [subjIndex,setSubjIndex] = useState(0);
   const [qIndex,setQIndex] = useState(0);
   const [answers,setAnswers] = useState({}); // questionId -> option
@@ -807,7 +821,7 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish, attempt
       return { subject: sd.subject, rawScore, correctCount, total };
     });
     const totalScore = perSubject.reduce((s,r)=>s+r.rawScore, 0);
-    const maxScore = perSubject.length * 100;
+    const maxScore = rawScoring ? perSubject.reduce((s,r)=>s+r.total, 0) : perSubject.length * 100;
 
     const responses = [];
     // Full snapshot per subject: every question with its options, the
@@ -834,14 +848,14 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish, attempt
       user_id:user.id, mode, challenge_week: challengeWeek || null,
       total_score: totalScore, max_score: maxScore,
       submitted_at: new Date().toISOString(), duration_seconds: durationSeconds-timeLeft,
-      details: { perSubject: snapshotPerSubject, autoSubmitted: autoSubmitReason || null }
+      details: { perSubject: snapshotPerSubject, autoSubmitted: autoSubmitReason || null, rawScoring, jambScore: jambScore ?? null }
     }).select().single();
     if(attempt){
       const rows = responses.map(r=>({...r, attempt_id: attempt.id}));
       await sb.from(responsesTable).insert(rows);
     }
-    onFinish({ perSubject, totalScore, maxScore, subjectData, answers, attemptId: attempt?.id, snapshotPerSubject });
-  },[subjectData, answers, mode, challengeWeek, user, durationSeconds, timeLeft, onFinish, attemptsTable, responsesTable]);
+    onFinish({ perSubject, totalScore, maxScore, subjectData, answers, attemptId: attempt?.id, snapshotPerSubject, rawScoring, jambScore: jambScore ?? null });
+  },[subjectData, answers, mode, challengeWeek, user, durationSeconds, timeLeft, onFinish, attemptsTable, responsesTable, rawScoring, jambScore]);
 
   useEffect(()=>{
     if(timeLeft<=0){ handleSubmit("time_up"); return; }
@@ -895,15 +909,15 @@ function MultiSubjectExam({ bundle, user, mode, challengeWeek, onFinish, attempt
 }
 
 function MultiSubjectResults({ result, user, onExit, title, hideReview }){
-  const { totalScore, maxScore, snapshotPerSubject } = result;
-  return <AttemptReview perSubject={snapshotPerSubject} totalScore={totalScore} maxScore={maxScore} user={user} onExit={onExit} title={title || "Mock Result"} hideReview={hideReview} />;
+  const { totalScore, maxScore, snapshotPerSubject, rawScoring, jambScore } = result;
+  return <AttemptReview perSubject={snapshotPerSubject} totalScore={totalScore} maxScore={maxScore} user={user} onExit={onExit} title={title || "Mock Result"} hideReview={hideReview} rawScoring={rawScoring} jambScore={jambScore} />;
 }
 
 // Shared review UI: score table + full question-by-question breakdown
 // with correct/incorrect highlighting and explanations. Used both right
 // after submitting and later from History (since perSubject snapshots
 // are stored permanently in jamb_attempts.details).
-function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title, hideReview }){
+function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title, hideReview, rawScoring, jambScore }){
   const [subjFilter,setSubjFilter] = useState("all");
 
   function handlePrint(){ window.print(); }
@@ -916,20 +930,28 @@ function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title, 
     doc.text(`Date: ${new Date().toLocaleDateString()}`, 14, 35);
     let y = 48;
     doc.setFontSize(12);
-    doc.text("Subject", 14, y); doc.text("Score (/100)", 100, y); doc.text("Correct", 150, y);
+    doc.text("Subject", 14, y); doc.text(rawScoring?"Score":"Score (/100)", 100, y); doc.text("Correct", 150, y);
     y += 6; doc.line(14,y,196,y); y += 6;
     perSubject.forEach(r=>{
       doc.text(r.name, 14, y);
-      doc.text(String(r.rawScore), 100, y);
+      doc.text(rawScoring? `${r.rawScore}/${r.total}` : String(r.rawScore), 100, y);
       doc.text(`${r.correct}/${r.total}`, 150, y);
       y += 7;
     });
     y += 4; doc.line(14,y,196,y); y += 8;
     doc.setFontSize(14); doc.text(`Total: ${totalScore} / ${maxScore}`, 14, y);
+    if(rawScoring){
+      y += 8; doc.setFontSize(11);
+      doc.text(`Percentage: ${((totalScore/maxScore)*100).toFixed(1)}%  ·  JAMB-equivalent: ${((totalScore/maxScore)*400).toFixed(0)}/400`, 14, y);
+      if(jambScore!=null){ y += 7; doc.text(`Composite score: ${(jambScore/8).toFixed(1)} + ${totalScore} = ${((jambScore/8)+totalScore).toFixed(1)} / 100`, 14, y); }
+    }
     doc.save(`${user.full_name.replace(/\s+/g,"_")}_jamb_result.pdf`);
   }
 
   const visibleSubjects = subjFilter==="all" ? perSubject : perSubject.filter(s=>s.code===subjFilter);
+  const percentage = maxScore>0 ? (totalScore/maxScore)*100 : 0;
+  const scaledTo400 = maxScore>0 ? (totalScore/maxScore)*400 : 0;
+  const composite = (rawScoring && jambScore!=null) ? (jambScore/8) + totalScore : null;
 
   return (
     <div>
@@ -937,15 +959,28 @@ function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title, 
       <div className="card">
         <p><strong>{user.full_name}</strong> · {new Date().toLocaleDateString()}</p>
         <table>
-          <thead><tr><th>Subject</th><th>Score (/100)</th><th>Correct</th></tr></thead>
+          <thead><tr><th>Subject</th><th>{rawScoring ? "Score" : "Score (/100)"}</th><th>Correct</th></tr></thead>
           <tbody>
             {perSubject.map(r=>(
-              <tr key={r.code}><td>{r.name}</td><td>{r.rawScore}</td><td>{r.correct}/{r.total}</td></tr>
+              <tr key={r.code}><td>{r.name}</td><td>{rawScoring ? `${r.rawScore}/${r.total}` : r.rawScore}</td><td>{r.correct}/{r.total}</td></tr>
             ))}
           </tbody>
         </table>
         <div className="divider"></div>
         <h2>{totalScore} / {maxScore}</h2>
+        {rawScoring && (
+          <div className="card-grid grid-3" style={{marginTop:".6em"}}>
+            <div className="field"><label>Raw score</label><p style={{fontWeight:700,fontSize:"1.1rem",margin:0}}>{totalScore} / {maxScore}</p></div>
+            <div className="field"><label>Percentage</label><p style={{fontWeight:700,fontSize:"1.1rem",margin:0}}>{percentage.toFixed(1)}%</p></div>
+            <div className="field"><label>JAMB-equivalent (/400)</label><p style={{fontWeight:700,fontSize:"1.1rem",margin:0}}>{scaledTo400.toFixed(0)} / 400</p></div>
+          </div>
+        )}
+        {composite!==null && (
+          <div className="card" style={{marginTop:"1em",background:"#f5f2e8"}}>
+            <p className="muted" style={{margin:0,fontSize:".85rem"}}>RSU composite score (JAMB ÷ 8 + this mock's score)</p>
+            <h2 style={{margin:".2em 0"}}>{(jambScore/8).toFixed(1)} + {totalScore} = {composite.toFixed(1)} / 100</h2>
+          </div>
+        )}
       </div>
       <div className="flex-row no-print">
         <button className="btn-secondary" onClick={handlePrint}>Print result</button>
@@ -970,7 +1005,7 @@ function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title, 
 
       {visibleSubjects.map(sd=>(
         <div key={sd.code}>
-          <h3>{sd.name} — {sd.correct}/{sd.total} correct ({sd.rawScore}/100)</h3>
+          <h3>{sd.name} — {sd.correct}/{sd.total} correct ({rawScoring ? `${sd.rawScore}/${sd.total}` : `${sd.rawScore}/100`})</h3>
           {sd.questions.map((q,i)=>{
             const options = [["A",q.option_a],["B",q.option_b],["C",q.option_c],["D",q.option_d], ...(q.option_e?[["E",q.option_e]]:[])];
             return (
@@ -988,7 +1023,9 @@ function AttemptReview({ perSubject, totalScore, maxScore, user, onExit, title, 
                 })}
                 {!q.selected_option && <p className="muted" style={{fontSize:".85rem"}}>You did not answer this question.</p>}
                 <p className="muted" style={{fontSize:".85rem"}}>
-                  {q.is_correct ? `Correct — earned ${Math.round(q.mark_value*100)/100} marks` : `Incorrect (0 marks)`}
+                  {rawScoring
+                    ? (q.is_correct ? "Correct (+1 mark)" : "Incorrect (0 marks)")
+                    : (q.is_correct ? `Correct — earned ${Math.round(q.mark_value*100)/100} marks` : `Incorrect (0 marks)`)}
                 </p>
                 {q.explanation && <p className="muted" style={{fontSize:".88rem",marginTop:".4em"}}><strong>Explanation:</strong> {q.explanation}</p>}
               </div>
@@ -1393,13 +1430,12 @@ function RSUPracticeSetup({ user, onStart, onExit }){
     if(topicId) query = query.eq("topic_id", topicId);
     const { data: pool } = await query;
     if(!pool || pool.length===0){ setErr("No RSU questions found for this subject yet. Ask the admin to add some."); setPreparing(false); return; }
-    const plan = buildDifficultyPlan(count);
     const seenIds = await getSeenQuestionIds(user.id, subjectId, pool.length, "rsu_seen_questions");
-    const picked = pickQuestionsForPlan(pool, plan, seenIds);
+    const picked = pickQuestionsRandom(pool, count, seenIds);
     if(picked.length===0){ setErr("Could not build a question set — try fewer questions or remove the topic filter."); setPreparing(false); return; }
     await recordSeenQuestions(user.id, subjectId, picked, "rsu_seen_questions");
     setPreparing(false);
-    onStart({ subjectData: [{ subject: subj, questions: picked, plan }], durationSeconds: minutes*60 });
+    onStart({ subjectData: [{ subject: subj, questions: picked }], durationSeconds: minutes*60 });
   }
 
   if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
@@ -1470,6 +1506,7 @@ function RSUMockSetup({ user, onStart, onExit }){
   const [loading,setLoading] = useState(true);
   const [err,setErr] = useState("");
   const [preparing,setPreparing] = useState(false);
+  const [jambScore,setJambScore] = useState("");
 
   useEffect(()=>{ (async()=>{
     const { data } = await sb.from("rsu_subjects").select("*").order("name");
@@ -1479,21 +1516,24 @@ function RSUMockSetup({ user, onStart, onExit }){
 
   async function handleStart(){
     setErr(""); setPreparing(true);
+    if(jambScore !== "" && (isNaN(jambScore) || jambScore<0 || jambScore>400)){
+      setErr("JAMB score must be a number between 0 and 400.");
+      setPreparing(false); return;
+    }
     const subjectData = [];
     for(const plan of RSU_MOCK_PLAN){
       const subj = subjects.find(s=>s.code===plan.code);
       if(!subj){ setErr(`Subject with code ${plan.code} not found — check the RSU setup SQL ran correctly.`); setPreparing(false); return; }
       const { data: pool } = await sb.from("rsu_questions").select("*").eq("subject_id", subj.id);
       if(!pool || pool.length===0){ setErr(`No RSU questions found for ${subj.name} yet.`); setPreparing(false); return; }
-      const diffPlan = buildDifficultyPlan(plan.count);
       const seenIds = await getSeenQuestionIds(user.id, subj.id, pool.length, "rsu_seen_questions");
-      const picked = pickQuestionsForPlan(pool, diffPlan, seenIds);
-      if(picked.length < plan.count * 0.5){ setErr(`Not enough questions across difficulty levels for ${subj.name} — only ${picked.length} of ${plan.count} could be filled.`); setPreparing(false); return; }
+      const picked = pickQuestionsRandom(pool, plan.count, seenIds);
+      if(picked.length < plan.count){ setErr(`Not enough questions for ${subj.name} — only ${picked.length} of ${plan.count} available. Ask the admin to add more.`); setPreparing(false); return; }
       await recordSeenQuestions(user.id, subj.id, picked, "rsu_seen_questions");
-      subjectData.push({ subject: subj, questions: picked, plan: diffPlan });
+      subjectData.push({ subject: subj, questions: picked });
     }
     setPreparing(false);
-    onStart({ subjectData, durationSeconds: 60*60 });
+    onStart({ subjectData, durationSeconds: 60*60, jambScore: jambScore!=="" ? Number(jambScore) : null });
   }
 
   if(loading) return <div className="empty-state"><span className="spinner"></span></div>;
@@ -1502,7 +1542,7 @@ function RSUMockSetup({ user, onStart, onExit }){
     <div>
       <button className="btn-ghost" onClick={onExit}>← Back</button>
       <h1>RSU Mock Session</h1>
-      <p className="muted">50 questions total, 60 minutes, in the exact RSU format. Only your score is revealed at the end — no answer review, just like the real screening.</p>
+      <p className="muted">50 questions total, 60 minutes, in the exact RSU format. Every question is worth 1 raw mark — there's no difficulty weighting here like in the JAMB sessions. Only your score is revealed at the end — no answer review, just like the real screening.</p>
       {err && <div className="error-box">{err}</div>}
       <div className="card">
         <table>
@@ -1514,6 +1554,11 @@ function RSUMockSetup({ user, onStart, onExit }){
             })}
           </tbody>
         </table>
+        <div className="field" style={{marginTop:"1em"}}>
+          <label>Your JAMB (UTME) score — optional</label>
+          <input type="number" min="0" max="400" placeholder="e.g. 240" value={jambScore} onChange={e=>setJambScore(e.target.value)} />
+          <p className="muted" style={{fontSize:".82rem",marginTop:".3em"}}>If you enter this, your result will also show RSU's real composite score: JAMB score ÷ 8 + this mock's score (out of 50) = composite out of 100.</p>
+        </div>
         <button className="btn-primary" style={{marginTop:"1em"}} onClick={handleStart} disabled={preparing}>{preparing?<span className="spinner"></span>:"Start RSU mock exam"}</button>
       </div>
     </div>
@@ -1629,6 +1674,8 @@ function HistoryScreen({ user, onExit }){
       user={user}
       onExit={()=>setViewing(null)}
       hideReview={isRsuMock}
+      rawScoring={!!d.rawScoring}
+      jambScore={d.jambScore ?? null}
       title={`${HISTORY_MODE_LABELS[viewing.mode]||viewing.mode} — ${new Date(viewing.submitted_at).toLocaleDateString()}`}
     />;
   }
@@ -1655,12 +1702,11 @@ function HistoryScreen({ user, onExit }){
                     <td>{a.total_score ?? "—"} / {a.max_score ?? "—"}</td>
                     <td>{a._pct.toFixed(1)}%</td>
                     <td style={{fontSize:".82rem"}}>
-                      {breakdown.map(s=> <div key={s.code}>{s.name}: {s.rawScore}/100 ({s.correct}/{s.total})</div>)}
+                      {breakdown.map(s=> <div key={s.code}>{s.name}: {a.details?.rawScoring ? `${s.rawScore}/${s.total}` : `${s.rawScore}/100`} ({s.correct}/{s.total})</div>)}
                     </td>
                     <td>
                       <div className="flex-row" style={{gap:".4em"}}>
-                        {!isRsuMock && <button className="btn-ghost" onClick={()=>setViewing(a)} disabled={!a.details?.perSubject}>View</button>}
-                        {isRsuMock && <span className="muted" style={{fontSize:".78rem"}}>Score only</span>}
+                        <button className="btn-ghost" onClick={()=>setViewing(a)} disabled={!a.details?.perSubject}>{isRsuMock ? "View score" : "View"}</button>
                         {confirmDeleteId===a.id
                           ? <>
                               <button className="btn-warn" onClick={()=>handleDelete(a.id, a._source)}>Confirm delete</button>
